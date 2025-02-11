@@ -31,6 +31,7 @@ const MaxRead = 1 << 24
 const CheckRead = 1 << 15
 
 func onRead(ctx context.Context, w *response, userHandle Handler) error {
+	Log.Info("YONI ON READ")
 	w.errorFmt = opAttrErrorFormatter
 	var obj nfsReadArgs
 	err := xdr.Read(w.req.Body, &obj)
