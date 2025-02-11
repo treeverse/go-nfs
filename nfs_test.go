@@ -13,8 +13,8 @@ import (
 
 	"github.com/go-git/go-billy/v5"
 	nfs "github.com/treeverse/go-nfs"
-	"github.com/willscott/go-nfs/helpers"
-	"github.com/willscott/go-nfs/helpers/memfs"
+	"github.com/treeverse/go-nfs/helpers"
+	"github.com/treeverse/go-nfs/helpers/memfs"
 
 	nfsc "github.com/willscott/go-nfs-client/nfs"
 	rpc "github.com/willscott/go-nfs-client/nfs/rpc"
