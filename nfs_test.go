@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/go-git/go-billy/v5"
-	nfs "github.com/willscott/go-nfs"
+	nfs "github.com/treeverse/go-nfs"
 	"github.com/willscott/go-nfs/helpers"
 	"github.com/willscott/go-nfs/helpers/memfs"
 

@@ -7,7 +7,7 @@ import (
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
 
-	nfs "github.com/willscott/go-nfs"
+	nfs "github.com/treeverse/go-nfs"
 	nfshelper "github.com/willscott/go-nfs/helpers"
 )
 

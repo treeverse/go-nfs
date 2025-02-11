@@ -7,7 +7,7 @@ import (
 
 	"github.com/willscott/memphis"
 
-	nfs "github.com/willscott/go-nfs"
+	nfs "github.com/treeverse/go-nfs"
 	nfshelper "github.com/willscott/go-nfs/helpers"
 )
 
