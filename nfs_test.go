@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/go-git/go-billy/v5"
+	"github.com/go-git/go-billy/v6"
 	nfs "github.com/willscott/go-nfs"
 	"github.com/willscott/go-nfs/helpers"
 	"github.com/willscott/go-nfs/helpers/memfs"
@@ -230,8 +230,8 @@ func TestNFS(t *testing.T) {
 	as2.Sort()
 	bs2.Sort()
 	if !reflect.DeepEqual(as2, bs2) {
-		fmt.Printf("should be %v\n", as2)
-		fmt.Printf("actual be %v\n", bs2)
+		t.Logf("should be %v\n", as2)
+		t.Logf("actual be %v\n", bs2)
 		t.Fatal("nfs.ReadDir error")
 	}
 
