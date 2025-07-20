@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"reflect"
 
-	"github.com/willscott/go-nfs"
+	"github.com/treeverse/go-nfs"
 
 	"github.com/go-git/go-billy/v6"
 	"github.com/google/uuid"
