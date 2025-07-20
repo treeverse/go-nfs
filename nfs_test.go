@@ -12,9 +12,9 @@ import (
 	"testing"
 
 	"github.com/go-git/go-billy/v6"
-	nfs "github.com/willscott/go-nfs"
-	"github.com/willscott/go-nfs/helpers"
-	"github.com/willscott/go-nfs/helpers/memfs"
+	nfs "github.com/treeverse/go-nfs"
+	"github.com/treeverse/go-nfs/helpers"
+	"github.com/treeverse/go-nfs/helpers/memfs"
 
 	nfsc "github.com/willscott/go-nfs-client/nfs"
 	rpc "github.com/willscott/go-nfs-client/nfs/rpc"

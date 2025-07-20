@@ -41,8 +41,8 @@ import (
 	"net"
 
 	"github.com/go-git/go-billy/v6/memfs"
-	nfs "github.com/willscott/go-nfs"
-	nfshelper "github.com/willscott/go-nfs/helpers"
+	nfs "github.com/treeverse/go-nfs"
+	nfshelper "github.com/treeverse/go-nfs/helpers"
 )
 
 func main() {
@@ -89,7 +89,7 @@ which do not translate to this abstraction.
   In particular, the `Sys()` escape hatch is queried by this library, and
   if your file system populates a [`syscall.Stat_t`](https://golang.org/pkg/syscall/#Stat_t)
   concrete struct, the ownership specified in that object will be used.
-  You can also return a [`file.FileInfo`](https://github.com/willscott/go-nfs/blob/master/file/file.go#L5)
+  You can also return a [`file.FileInfo`](https://github.com/treeverse/go-nfs/blob/master/file/file.go#L5)
   which doesn't vary between platforms so may be easier to deal with.
 
 * Relevant RFCS:

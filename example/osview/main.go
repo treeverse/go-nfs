@@ -9,8 +9,8 @@ package main
 
 // 	"github.com/willscott/memphis"
 
-// 	nfs "github.com/willscott/go-nfs"
-// 	nfshelper "github.com/willscott/go-nfs/helpers"
+// 	nfs "github.com/treeverse/go-nfs"
+// 	nfshelper "github.com/treeverse/go-nfs/helpers"
 // )
 
 // func main() {
