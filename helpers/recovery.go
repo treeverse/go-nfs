@@ -17,13 +17,16 @@ type OnPanic func(any)
 // to ensure panics in the filesystem implementation are caught.
 func RecoverPanics(h nfs.Handler, onPanic OnPanic) nfs.Handler {
 	return &recoveryHandler{
-		Handler: h,
+		handler: h,
 		onPanic: onPanic,
 	}
 }
 
+// recoveryHandler wraps an nfs.Handler with panic recovery.
+// It uses explicit delegation (not embedding) so the compiler forces
+// us to implement any new methods added to the interface.
 type recoveryHandler struct {
-	nfs.Handler
+	handler nfs.Handler
 	onPanic OnPanic
 }
 
@@ -35,7 +38,7 @@ func (h *recoveryHandler) recover() {
 
 func (h *recoveryHandler) Mount(ctx context.Context, conn net.Conn, req nfs.MountRequest) (status nfs.MountStatus, hndl billy.Filesystem, auths []nfs.AuthFlavor) {
 	defer h.recover()
-	status, hndl, auths = h.Handler.Mount(ctx, conn, req)
+	status, hndl, auths = h.handler.Mount(ctx, conn, req)
 	if hndl != nil {
 		hndl = &recoveryFilesystem{Filesystem: hndl, onPanic: h.onPanic}
 	}
@@ -48,7 +51,7 @@ func (h *recoveryHandler) Change(fs billy.Filesystem) billy.Change {
 	if rf, ok := fs.(*recoveryFilesystem); ok {
 		fs = rf.Filesystem
 	}
-	return h.Handler.Change(fs)
+	return h.handler.Change(fs)
 }
 
 func (h *recoveryHandler) FSStat(ctx context.Context, fs billy.Filesystem, stat *nfs.FSStat) error {
@@ -56,7 +59,7 @@ func (h *recoveryHandler) FSStat(ctx context.Context, fs billy.Filesystem, stat 
 	if rf, ok := fs.(*recoveryFilesystem); ok {
 		fs = rf.Filesystem
 	}
-	return h.Handler.FSStat(ctx, fs, stat)
+	return h.handler.FSStat(ctx, fs, stat)
 }
 
 func (h *recoveryHandler) ToHandle(fs billy.Filesystem, path []string) []byte {
@@ -64,12 +67,12 @@ func (h *recoveryHandler) ToHandle(fs billy.Filesystem, path []string) []byte {
 	if rf, ok := fs.(*recoveryFilesystem); ok {
 		fs = rf.Filesystem
 	}
-	return h.Handler.ToHandle(fs, path)
+	return h.handler.ToHandle(fs, path)
 }
 
 func (h *recoveryHandler) FromHandle(fh []byte) (billy.Filesystem, []string, error) {
 	defer h.recover()
-	fs, path, err := h.Handler.FromHandle(fh)
+	fs, path, err := h.handler.FromHandle(fh)
 	if fs != nil {
 		fs = &recoveryFilesystem{Filesystem: fs, onPanic: h.onPanic}
 	}
@@ -81,12 +84,12 @@ func (h *recoveryHandler) InvalidateHandle(fs billy.Filesystem, fh []byte) error
 	if rf, ok := fs.(*recoveryFilesystem); ok {
 		fs = rf.Filesystem
 	}
-	return h.Handler.InvalidateHandle(fs, fh)
+	return h.handler.InvalidateHandle(fs, fh)
 }
 
 func (h *recoveryHandler) HandleLimit() int {
 	defer h.recover()
-	return h.Handler.HandleLimit()
+	return h.handler.HandleLimit()
 }
 
 // recoveryFilesystem wraps a billy.Filesystem with panic recovery.
