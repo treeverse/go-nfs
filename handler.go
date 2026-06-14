@@ -2,6 +2,7 @@ package nfs
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"net"
 
@@ -49,4 +50,23 @@ type CachingHandler interface {
 
 	// fs.FileInfo needs to be sorted by Name(), nil in case of a cache-miss
 	DataForVerifier(path string, verifier uint64) []fs.FileInfo
+}
+
+// ErrStaleCookie is returned by PagedDirHandler.ReadDirPage when the
+// cookie verifier no longer matches the directory state.  go-nfs maps
+// this to NFSStatusBadCookie so the client restarts the listing.
+var ErrStaleCookie = errors.New("stale NFS cookie verifier")
+
+// PagedDirHandler is an optional interface for handlers that can serve
+// directory listings one page at a time without materialising the full
+// listing.  When implemented, go-nfs calls ReadDirPage instead of
+// billy.Filesystem.ReadDir.
+//
+// startAfterCookie is 0 for the first page, or the cookie of the last
+// entry from the previous page.  verifier is 0 for the first page, or
+// the value returned by the previous call.  Entries must be sorted by
+// Name().  The implementation should return ErrStaleCookie when the
+// directory has changed and the listing cannot be continued.
+type PagedDirHandler interface {
+	ReadDirPage(ctx context.Context, path string, startAfterCookie, verifier uint64, maxEntries int) (entries []fs.FileInfo, newVerifier uint64, eof bool, err error)
 }

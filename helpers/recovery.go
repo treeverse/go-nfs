@@ -2,6 +2,7 @@ package helpers
 
 import (
 	"context"
+	"io/fs"
 	"net"
 	"os"
 
@@ -90,6 +91,16 @@ func (h *recoveryHandler) InvalidateHandle(fs billy.Filesystem, fh []byte) error
 func (h *recoveryHandler) HandleLimit() int {
 	defer h.recover()
 	return h.handler.HandleLimit()
+}
+
+// ReadDirPage implements nfs.PagedDirHandler by forwarding to the wrapped
+// handler when it supports paged directory listings.
+func (h *recoveryHandler) ReadDirPage(ctx context.Context, path string, startAfterCookie, verifier uint64, maxEntries int) ([]fs.FileInfo, uint64, bool, error) {
+	defer h.recover()
+	if pager, ok := h.handler.(nfs.PagedDirHandler); ok {
+		return pager.ReadDirPage(ctx, path, startAfterCookie, verifier, maxEntries)
+	}
+	return nil, 0, false, nfs.ErrStaleCookie
 }
 
 // recoveryFilesystem wraps a billy.Filesystem with panic recovery.

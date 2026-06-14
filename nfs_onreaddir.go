@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -28,6 +29,13 @@ type readDirEntity struct {
 	Next   bool
 }
 
+type dirPage struct {
+	entries     []fs.FileInfo
+	firstCookie uint64
+	verifier    uint64
+	eof         bool
+}
+
 func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 	w.errorFmt = opAttrErrorFormatter
 	obj := readDirArgs{}
@@ -45,20 +53,13 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusStale, err}
 	}
 
-	contents, verifier, err := getDirListingWithVerifier(userHandle, obj.Handle, obj.CookieVerif)
-	if err != nil {
-		return err
-	}
-	if obj.Cookie > 0 && obj.CookieVerif > 0 && verifier != obj.CookieVerif {
-		return &NFSStatusError{NFSStatusBadCookie, nil}
-	}
-
 	entities := make([]readDirEntity, 0)
 	maxBytes := uint32(100) // conservative overhead measure
+	maxEntities := userHandle.HandleLimit() / 2
+	eof := true
+	var verifier uint64
 
-	started := obj.Cookie == 0
-	if started {
-		// add '.' and '..' to entities
+	if obj.Cookie == 0 {
 		dotdotFileID := uint64(0)
 		if len(p) > 0 {
 			dda := tryStat(fs, p[0:len(p)-1])
@@ -77,27 +78,56 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 		)
 	}
 
-	eof := true
-	maxEntities := userHandle.HandleLimit() / 2
-	for i, c := range contents {
-		// cookie equates to index within contents + 2 (for '.' and '..')
-		cookie := uint64(i + 2)
-		if started {
-			maxBytes += 512 // TODO: better estimation.
-			if maxBytes > obj.Count || len(entities) > maxEntities {
+	if page, nfsErr, supported := getPagedListing(ctx, userHandle, fs.Join(p...), obj.Cookie, obj.CookieVerif, maxEntities-len(entities)); supported {
+		if nfsErr != nil {
+			return nfsErr
+		}
+		verifier = page.verifier
+		eof = page.eof
+		for i, e := range page.entries {
+			maxBytes += 512 
+			if maxBytes > obj.Count {
 				eof = false
 				break
 			}
-
-			attrs := ToFileAttribute(c, path.Join(append(p, c.Name())...))
+			attrs := ToFileAttribute(e, path.Join(append(p, e.Name())...))
 			entities = append(entities, readDirEntity{
 				FileID: attrs.Fileid,
-				Name:   []byte(c.Name()),
-				Cookie: cookie,
+				Name:   []byte(e.Name()),
+				Cookie: page.firstCookie + uint64(i),
 				Next:   true,
 			})
-		} else if cookie == obj.Cookie {
-			started = true
+		}
+	} else {
+		contents, v, err := getDirListingWithVerifier(userHandle, obj.Handle, obj.CookieVerif)
+		if err != nil {
+			return err
+		}
+		if obj.Cookie > 0 && obj.CookieVerif > 0 && v != obj.CookieVerif {
+			return &NFSStatusError{NFSStatusBadCookie, nil}
+		}
+		verifier = v
+
+		started := obj.Cookie == 0
+		for i, c := range contents {
+			// cookie equates to index within contents + 2 (for '.' and '..')
+			cookie := uint64(i + 2)
+			if started {
+				maxBytes += 512 // TODO: better estimation.
+				if maxBytes > obj.Count || len(entities) > maxEntities {
+					eof = false
+					break
+				}
+				attrs := ToFileAttribute(c, path.Join(append(p, c.Name())...))
+				entities = append(entities, readDirEntity{
+					FileID: attrs.Fileid,
+					Name:   []byte(c.Name()),
+					Cookie: cookie,
+					Next:   true,
+				})
+			} else if cookie == obj.Cookie {
+				started = true
+			}
 		}
 	}
 
@@ -118,8 +148,6 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 	}
 	if len(entities) > 0 {
 		entities[len(entities)-1].Next = false
-		// no next for last entity
-
 		for _, e := range entities {
 			if err := xdr.Write(writer, e); err != nil {
 				return &NFSStatusError{NFSStatusServerFault, err}
@@ -188,4 +216,39 @@ func hashPathAndContents(path string, contents []fs.FileInfo) uint64 {
 
 	verify := vHash.Sum(nil)[0:8]
 	return binary.BigEndian.Uint64(verify)
+}
+
+// getPagedListing calls ReadDirPage on the handler if it implements
+// PagedDirHandler.  Returns (page, nil, true) on success, (_, nfsErr, true)
+// on error, and (_, nil, false) when the handler does not support paging
+// (caller should fall back to getDirListingWithVerifier).
+func getPagedListing(ctx context.Context, userHandle Handler, dirPath string, cookie, cookieVerif uint64, maxEntries int) (dirPage, error, bool) {
+	pager, ok := userHandle.(PagedDirHandler)
+	if !ok {
+		return dirPage{}, nil, false
+	}
+
+	entries, newVerifier, eof, err := pager.ReadDirPage(ctx, dirPath, cookie, cookieVerif, maxEntries)
+	if err != nil {
+		if errors.Is(err, ErrStaleCookie) {
+			return dirPage{}, &NFSStatusError{NFSStatusBadCookie, nil}, true
+		}
+		if os.IsPermission(err) {
+			return dirPage{}, &NFSStatusError{NFSStatusAccess, err}, true
+		}
+		return dirPage{}, &NFSStatusError{NFSStatusServerFault, err}, true
+	}
+	if cookie > 0 && cookieVerif != 0 && newVerifier != cookieVerif {
+		return dirPage{}, &NFSStatusError{NFSStatusBadCookie, nil}, true
+	}
+
+	// NFS cookies for actual entries start at 2 (after '.'=0 and '..'=1).
+	// On subsequent pages the first entry follows the last cookie the client
+	// echoed back.
+	firstCookie := uint64(2)
+	if cookie >= 2 {
+		firstCookie = cookie + 1
+	}
+
+	return dirPage{entries: entries, firstCookie: firstCookie, verifier: newVerifier, eof: eof}, nil, true
 }

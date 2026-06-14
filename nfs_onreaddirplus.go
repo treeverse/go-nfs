@@ -51,21 +51,14 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusStale, err}
 	}
 
-	contents, verifier, err := getDirListingWithVerifier(userHandle, obj.Handle, obj.CookieVerif)
-	if err != nil {
-		return err
-	}
-	if obj.Cookie > 0 && obj.CookieVerif > 0 && verifier != obj.CookieVerif {
-		return &NFSStatusError{NFSStatusBadCookie, nil}
-	}
-
 	entities := make([]readDirPlusEntity, 0)
 	dirBytes := uint32(0)
 	maxBytes := uint32(100) // conservative overhead measure
+	maxEntities := userHandle.HandleLimit() / 2
+	eof := true
+	var verifier uint64
 
-	started := obj.Cookie == 0
-	if started {
-		// add '.' and '..' to entities
+	if obj.Cookie == 0 {
 		dotdotFileID := uint64(0)
 		if len(p) > 0 {
 			dda := tryStat(fs, p[0:len(p)-1])
@@ -84,36 +77,66 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 		)
 	}
 
-	eof := true
-	maxEntities := userHandle.HandleLimit() / 2
-	fb := 0
-	fss := 0
-	for i, c := range contents {
-		// cookie equates to index within contents + 2 (for '.' and '..')
-		cookie := uint64(i + 2)
-		fb++
-		if started {
-			fss++
-			dirBytes += uint32(len(c.Name()) + 20)
+	if page, nfsErr, supported := getPagedListing(ctx, userHandle, fs.Join(p...), obj.Cookie, obj.CookieVerif, maxEntities-len(entities)); supported {
+		if nfsErr != nil {
+			return nfsErr
+		}
+		verifier = page.verifier
+		eof = page.eof
+		for i, e := range page.entries {
+			dirBytes += uint32(len(e.Name()) + 20)
 			maxBytes += 512 // TODO: better estimation.
-			if dirBytes > obj.DirCount || maxBytes > obj.MaxCount || len(entities) > maxEntities {
+			if dirBytes > obj.DirCount || maxBytes > obj.MaxCount {
 				eof = false
 				break
 			}
-
-			filePath := joinPath(p, c.Name())
+			filePath := joinPath(p, e.Name())
 			handle := userHandle.ToHandle(fs, filePath)
-			attrs := ToFileAttribute(c, path.Join(filePath...))
+			attrs := ToFileAttribute(e, path.Join(filePath...))
 			entities = append(entities, readDirPlusEntity{
 				FileID:     attrs.Fileid,
-				Name:       []byte(c.Name()),
-				Cookie:     cookie,
+				Name:       []byte(e.Name()),
+				Cookie:     page.firstCookie + uint64(i),
 				Attributes: attrs,
 				Handle:     &handle,
 				Next:       true,
 			})
-		} else if cookie == obj.Cookie {
-			started = true
+		}
+	} else {
+		contents, v, err := getDirListingWithVerifier(userHandle, obj.Handle, obj.CookieVerif)
+		if err != nil {
+			return err
+		}
+		if obj.Cookie > 0 && obj.CookieVerif > 0 && v != obj.CookieVerif {
+			return &NFSStatusError{NFSStatusBadCookie, nil}
+		}
+		verifier = v
+
+		started := obj.Cookie == 0
+		for i, c := range contents {
+			// cookie equates to index within contents + 2 (for '.' and '..')
+			cookie := uint64(i + 2)
+			if started {
+				dirBytes += uint32(len(c.Name()) + 20)
+				maxBytes += 512 // TODO: better estimation.
+				if dirBytes > obj.DirCount || maxBytes > obj.MaxCount || len(entities) > maxEntities {
+					eof = false
+					break
+				}
+				filePath := joinPath(p, c.Name())
+				handle := userHandle.ToHandle(fs, filePath)
+				attrs := ToFileAttribute(c, path.Join(filePath...))
+				entities = append(entities, readDirPlusEntity{
+					FileID:     attrs.Fileid,
+					Name:       []byte(c.Name()),
+					Cookie:     cookie,
+					Attributes: attrs,
+					Handle:     &handle,
+					Next:       true,
+				})
+			} else if cookie == obj.Cookie {
+				started = true
+			}
 		}
 	}
 
@@ -133,8 +156,6 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 	}
 	if len(entities) > 0 {
 		entities[len(entities)-1].Next = false
-		// no next for last entity
-
 		for _, e := range entities {
 			if err := xdr.Write(writer, e); err != nil {
 				return &NFSStatusError{NFSStatusServerFault, err}
