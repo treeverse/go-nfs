@@ -2,6 +2,7 @@ package helpers
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"testing"
@@ -56,5 +57,74 @@ func TestRecoverPanicsFS(t *testing.T) {
 
 	if panicked != "stat panic" {
 		t.Errorf("expected panic 'stat panic', got %v", panicked)
+	}
+}
+
+// panicFile panics in the file operations go-nfs invokes directly on the file
+// returned by Open/OpenFile (ReadAt for reads, WriteAt for writes).
+type panicFile struct {
+	billy.File
+}
+
+func (f *panicFile) ReadAt(p []byte, off int64) (int, error)  { panic("readat panic") }
+func (f *panicFile) WriteAt(p []byte, off int64) (int, error) { panic("writeat panic") }
+
+// panicFileFS returns a panicFile from Open, so the wrapped filesystem hands
+// back a file whose operations panic.
+type panicFileFS struct {
+	billy.Filesystem
+}
+
+func (fs *panicFileFS) Open(filename string) (billy.File, error) {
+	return &panicFile{}, nil
+}
+
+func TestRecoverPanicsFile(t *testing.T) {
+	tests := []struct {
+		name      string
+		wantPanic string
+		op        func(billy.File) error
+	}{
+		{
+			name:      "ReadAt",
+			wantPanic: "readat panic",
+			op: func(f billy.File) error {
+				_, err := f.ReadAt(make([]byte, 4), 0)
+				return err
+			},
+		},
+		{
+			name:      "WriteAt",
+			wantPanic: "writeat panic",
+			op: func(f billy.File) error {
+				_, err := f.WriteAt(make([]byte, 4), 0)
+				return err
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := &panicFileFS{memfs.New()}
+			handler := NewNullAuthHandler(fs)
+
+			var panicked any
+			wrapped := RecoverPanics(handler, func(r any) {
+				panicked = r
+			})
+
+			_, wrappedFS, _ := wrapped.Mount(context.Background(), nil, nfs.MountRequest{})
+			f, err := wrappedFS.Open("foo")
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+
+			err = tc.op(f)
+			if panicked != tc.wantPanic {
+				t.Errorf("expected panic %q, got %v", tc.wantPanic, panicked)
+			}
+			if !errors.Is(err, ErrRecoveredPanic) {
+				t.Errorf("expected ErrRecoveredPanic, got %v", err)
+			}
+		})
 	}
 }
