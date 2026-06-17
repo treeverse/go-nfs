@@ -78,18 +78,13 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 		)
 	}
 
-	if page, nfsErr, supported := getPagedListing(ctx, userHandle, fs.Join(p...), obj.Cookie, obj.CookieVerif, maxEntities-len(entities)); supported {
+	if page, nfsErr, supported := getPagedListing(ctx, userHandle, w.pagedCookies, fs.Join(p...), obj.Cookie, obj.CookieVerif, maxEntities-len(entities)); supported {
 		if nfsErr != nil {
 			return nfsErr
 		}
 		verifier = page.verifier
 		eof = page.eof
 		for i, e := range page.entries {
-			maxBytes += 512 
-			if maxBytes > obj.Count {
-				eof = false
-				break
-			}
 			attrs := ToFileAttribute(e, path.Join(append(p, e.Name())...))
 			entities = append(entities, readDirEntity{
 				FileID: attrs.Fileid,
@@ -222,13 +217,29 @@ func hashPathAndContents(path string, contents []fs.FileInfo) uint64 {
 // PagedDirHandler.  Returns (page, nil, true) on success, (_, nfsErr, true)
 // on error, and (_, nil, false) when the handler does not support paging
 // (caller should fall back to getDirListingWithVerifier).
-func getPagedListing(ctx context.Context, userHandle Handler, dirPath string, cookie, cookieVerif uint64, maxEntries int) (dirPage, error, bool) {
+//
+// table holds the per-server mapping from NFS uint64 cookies to the opaque
+// tree-native resume cookies returned by ReadDirPage.  go-nfs owns this
+// translation so that handlers never need to know about NFS cookie numbering.
+func getPagedListing(ctx context.Context, userHandle Handler, table *pagedCookieTable, dirPath string, cookie, cookieVerif uint64, maxEntries int) (dirPage, error, bool) {
 	pager, ok := userHandle.(PagedDirHandler)
 	if !ok {
 		return dirPage{}, nil, false
 	}
 
-	entries, newVerifier, eof, err := pager.ReadDirPage(ctx, dirPath, cookie, cookieVerif, maxEntries)
+	// Translate the NFS uint64 cookie back to the opaque tree resume cookie
+	// that was stored when the previous page was served.
+	var resumeCookie, resumeVerifier []byte
+	if cookie >= 2 && cookieVerif != 0 {
+		entry, ok := table.lookup(cookieVerif, cookie)
+		if !ok {
+			return dirPage{}, &NFSStatusError{NFSStatusBadCookie, nil}, true
+		}
+		resumeCookie = entry.treeCookie
+		resumeVerifier = entry.treeVerifier
+	}
+
+	entries, newTreeCookie, newTreeVerifier, eof, err := pager.ReadDirPage(ctx, dirPath, resumeCookie, resumeVerifier, maxEntries)
 	if err != nil {
 		if errors.Is(err, ErrStaleCookie) {
 			return dirPage{}, &NFSStatusError{NFSStatusBadCookie, nil}, true
@@ -237,9 +248,6 @@ func getPagedListing(ctx context.Context, userHandle Handler, dirPath string, co
 			return dirPage{}, &NFSStatusError{NFSStatusAccess, err}, true
 		}
 		return dirPage{}, &NFSStatusError{NFSStatusServerFault, err}, true
-	}
-	if cookie > 0 && cookieVerif != 0 && newVerifier != cookieVerif {
-		return dirPage{}, &NFSStatusError{NFSStatusBadCookie, nil}, true
 	}
 
 	// NFS cookies for actual entries start at 2 (after '.'=0 and '..'=1).
@@ -250,5 +258,13 @@ func getPagedListing(ctx context.Context, userHandle Handler, dirPath string, co
 		firstCookie = cookie + 1
 	}
 
-	return dirPage{entries: entries, firstCookie: firstCookie, verifier: newVerifier, eof: eof}, nil, true
+	// Store the resume point for the next page, keyed by the NFS cookie of
+	// the last entry on this page.
+	nfsVerifier := hashVerifier(newTreeVerifier)
+	if len(entries) > 0 {
+		lastNFSCookie := firstCookie + uint64(len(entries)) - 1
+		table.store(nfsVerifier, lastNFSCookie, newTreeCookie, newTreeVerifier)
+	}
+
+	return dirPage{entries: entries, firstCookie: firstCookie, verifier: nfsVerifier, eof: eof}, nil, true
 }

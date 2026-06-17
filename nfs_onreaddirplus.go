@@ -77,7 +77,7 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 		)
 	}
 
-	if page, nfsErr, supported := getPagedListing(ctx, userHandle, fs.Join(p...), obj.Cookie, obj.CookieVerif, maxEntities-len(entities)); supported {
+	if page, nfsErr, supported := getPagedListing(ctx, userHandle, w.pagedCookies, fs.Join(p...), obj.Cookie, obj.CookieVerif, maxEntities-len(entities)); supported {
 		if nfsErr != nil {
 			return nfsErr
 		}

@@ -6,8 +6,8 @@ import (
 	"net"
 	"os"
 
-	"github.com/go-git/go-billy/v6"
-	"github.com/treeverse/go-nfs"
+	billy "github.com/go-git/go-billy/v6"
+	nfs "github.com/treeverse/go-nfs"
 )
 
 // OnPanic is a function called when a panic is recovered.
@@ -95,12 +95,12 @@ func (h *recoveryHandler) HandleLimit() int {
 
 // ReadDirPage implements nfs.PagedDirHandler by forwarding to the wrapped
 // handler when it supports paged directory listings.
-func (h *recoveryHandler) ReadDirPage(ctx context.Context, path string, startAfterCookie, verifier uint64, maxEntries int) ([]fs.FileInfo, uint64, bool, error) {
+func (h *recoveryHandler) ReadDirPage(ctx context.Context, path string, resumeCookie, verifier []byte, maxEntries int) ([]fs.FileInfo, []byte, []byte, bool, error) {
 	defer h.recover()
 	if pager, ok := h.handler.(nfs.PagedDirHandler); ok {
-		return pager.ReadDirPage(ctx, path, startAfterCookie, verifier, maxEntries)
+		return pager.ReadDirPage(ctx, path, resumeCookie, verifier, maxEntries)
 	}
-	return nil, 0, false, nfs.ErrStaleCookie
+	return nil, nil, nil, false, nfs.ErrStaleCookie
 }
 
 // recoveryFilesystem wraps a billy.Filesystem with panic recovery.

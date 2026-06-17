@@ -53,8 +53,8 @@ type CachingHandler interface {
 }
 
 // ErrStaleCookie is returned by PagedDirHandler.ReadDirPage when the
-// cookie verifier no longer matches the directory state.  go-nfs maps
-// this to NFSStatusBadCookie so the client restarts the listing.
+// resumeCookie or verifier no longer matches the directory state.  go-nfs
+// maps this to NFSStatusBadCookie so the client restarts the listing.
 var ErrStaleCookie = errors.New("stale NFS cookie verifier")
 
 // PagedDirHandler is an optional interface for handlers that can serve
@@ -62,11 +62,10 @@ var ErrStaleCookie = errors.New("stale NFS cookie verifier")
 // listing.  When implemented, go-nfs calls ReadDirPage instead of
 // billy.Filesystem.ReadDir.
 //
-// startAfterCookie is 0 for the first page, or the cookie of the last
-// entry from the previous page.  verifier is 0 for the first page, or
-// the value returned by the previous call.  Entries must be sorted by
-// Name().  The implementation should return ErrStaleCookie when the
-// directory has changed and the listing cannot be continued.
+// resumeCookie and verifier are nil for the first page, or the values
+// returned by the previous call.  They are opaque to go-nfs — the handler
+// should pass them directly to the underlying directory iterator without
+// interpreting their contents.
 type PagedDirHandler interface {
-	ReadDirPage(ctx context.Context, path string, startAfterCookie, verifier uint64, maxEntries int) (entries []fs.FileInfo, newVerifier uint64, eof bool, err error)
+	ReadDirPage(ctx context.Context, path string, resumeCookie, verifier []byte, maxEntries int) (entries []fs.FileInfo, newCookie, newVerifier []byte, eof bool, err error)
 }
