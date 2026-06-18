@@ -54,7 +54,6 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 	entities := make([]readDirPlusEntity, 0)
 	dirBytes := uint32(0)
 	maxBytes := uint32(100) // conservative overhead measure
-	maxEntities := userHandle.HandleLimit() / 2
 	eof := true
 	var verifier uint64
 
@@ -91,7 +90,7 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 			// maxBytes: ~84B FileAttribute + 36B handle + ~20B base + name padded to 4B.
 			// 256 is a conservative overestimate
 			maxBytes += 256
-			if dirBytes > obj.DirCount || maxBytes > obj.MaxCount || len(entities) > maxEntities {
+			if dirBytes > obj.DirCount || maxBytes > obj.MaxCount {
 				eof = false
 				break
 			}
@@ -124,7 +123,7 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 			if started {
 				dirBytes += uint32(len(c.Name()) + 20)
 				maxBytes += 512 // TODO: better estimation.
-				if dirBytes > obj.DirCount || maxBytes > obj.MaxCount || len(entities) > maxEntities {
+				if dirBytes > obj.DirCount || maxBytes > obj.MaxCount {
 					eof = false
 					break
 				}

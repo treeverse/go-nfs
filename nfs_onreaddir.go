@@ -48,7 +48,6 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 
 	entities := make([]readDirEntity, 0)
 	maxBytes := uint32(100) // conservative overhead measure
-	maxEntities := userHandle.HandleLimit() / 2
 	eof := true
 	var verifier uint64
 
@@ -82,7 +81,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 			e := it.FileInfo()
 			// 8B FileID + 4B+name+pad + 8B Cookie + 4B Next ≈ 36B typical; 64 adds safety margin.
 			maxBytes += 64
-			if maxBytes > obj.Count || len(entities) > maxEntities {
+			if maxBytes > obj.Count {
 				eof = false
 				break
 			}
@@ -111,7 +110,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 			if started {
 				// 8B FileID + 4B+name+pad + 8B Cookie + 4B Next ≈ 36B typical; 64 adds safety margin.
 				maxBytes += 64
-				if maxBytes > obj.Count || len(entities) > maxEntities {
+				if maxBytes > obj.Count {
 					eof = false
 					break
 				}
