@@ -73,7 +73,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 	if h, ok := userHandle.(DirIteratorHandler); ok {
 		it, err := h.OpenDir(ctx, fs.Join(p...), obj.Cookie, obj.CookieVerif)
 		if err != nil {
-			return parseIteratorErrors(err)
+			return translateIteratorError(err)
 		}
 		defer it.Close()
 		verifier = it.Verifier()
@@ -216,7 +216,7 @@ func hashPathAndContents(path string, contents []fs.FileInfo) uint64 {
 	return binary.BigEndian.Uint64(verify)
 }
 
-func parseIteratorErrors(err error) error {
+func translateIteratorError(err error) error {
 	if errors.Is(err, ErrStaleCookie) {
 		return &NFSStatusError{NFSStatusBadCookie, nil}
 	}

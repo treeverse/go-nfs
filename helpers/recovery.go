@@ -5,8 +5,8 @@ import (
 	"net"
 	"os"
 
-	billy "github.com/go-git/go-billy/v6"
-	nfs "github.com/treeverse/go-nfs"
+	"github.com/go-git/go-billy/v6"
+	"github.com/treeverse/go-nfs"
 )
 
 // OnPanic is a function called when a panic is recovered.
