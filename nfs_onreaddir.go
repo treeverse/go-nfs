@@ -29,13 +29,6 @@ type readDirEntity struct {
 	Next   bool
 }
 
-type dirPage struct {
-	entries     []fs.FileInfo
-	firstCookie uint64
-	verifier    uint64
-	eof         bool
-}
-
 func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 	w.errorFmt = opAttrErrorFormatter
 	obj := readDirArgs{}
@@ -78,18 +71,26 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 		)
 	}
 
-	if page, nfsErr, supported := getPagedListing(ctx, userHandle, w.pagedCookies, fs.Join(p...), obj.Cookie, obj.CookieVerif, maxEntities-len(entities)); supported {
-		if nfsErr != nil {
-			return nfsErr
+	if h, ok := userHandle.(DirIteratorHandler); ok {
+		it, err := h.OpenDir(ctx, fs.Join(p...), obj.Cookie, obj.CookieVerif)
+		if err != nil {
+			return parseIteratorErrors(err)
 		}
-		verifier = page.verifier
-		eof = page.eof
-		for i, e := range page.entries {
+		defer it.Close()
+		verifier = it.Verifier()
+		for it.Next() {
+			e := it.FileInfo()
+			// 8B FileID + 4B+name+pad + 8B Cookie + 4B Next ≈ 36B typical; 64 adds safety margin.
+			maxBytes += 64
+			if maxBytes > obj.Count || len(entities) > maxEntities {
+				eof = false
+				break
+			}
 			attrs := ToFileAttribute(e, path.Join(append(p, e.Name())...))
 			entities = append(entities, readDirEntity{
 				FileID: attrs.Fileid,
 				Name:   []byte(e.Name()),
-				Cookie: page.firstCookie + uint64(i),
+				Cookie: it.Cookie(),
 				Next:   true,
 			})
 		}
@@ -108,7 +109,8 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 			// cookie equates to index within contents + 2 (for '.' and '..')
 			cookie := uint64(i + 2)
 			if started {
-				maxBytes += 512 // TODO: better estimation.
+				// 8B FileID + 4B+name+pad + 8B Cookie + 4B Next ≈ 36B typical; 64 adds safety margin.
+				maxBytes += 64
 				if maxBytes > obj.Count || len(entities) > maxEntities {
 					eof = false
 					break
@@ -213,58 +215,12 @@ func hashPathAndContents(path string, contents []fs.FileInfo) uint64 {
 	return binary.BigEndian.Uint64(verify)
 }
 
-// getPagedListing calls ReadDirPage on the handler if it implements
-// PagedDirHandler.  Returns (page, nil, true) on success, (_, nfsErr, true)
-// on error, and (_, nil, false) when the handler does not support paging
-// (caller should fall back to getDirListingWithVerifier).
-//
-// table holds the per-server mapping from NFS uint64 cookies to the opaque
-// tree-native resume cookies returned by ReadDirPage.  go-nfs owns this
-// translation so that handlers never need to know about NFS cookie numbering.
-func getPagedListing(ctx context.Context, userHandle Handler, table *pagedCookieTable, dirPath string, cookie, cookieVerif uint64, maxEntries int) (dirPage, error, bool) {
-	pager, ok := userHandle.(PagedDirHandler)
-	if !ok {
-		return dirPage{}, nil, false
+func parseIteratorErrors(err error) error {
+	if errors.Is(err, ErrStaleCookie) {
+		return &NFSStatusError{NFSStatusBadCookie, nil}
 	}
-
-	// Translate the NFS uint64 cookie back to the opaque tree resume cookie
-	// that was stored when the previous page was served.
-	var resumeCookie, resumeVerifier []byte
-	if cookie >= 2 && cookieVerif != 0 {
-		entry, ok := table.lookup(cookieVerif, cookie)
-		if !ok {
-			return dirPage{}, &NFSStatusError{NFSStatusBadCookie, nil}, true
-		}
-		resumeCookie = entry.treeCookie
-		resumeVerifier = entry.treeVerifier
+	if os.IsPermission(err) {
+		return &NFSStatusError{NFSStatusAccess, err}
 	}
-
-	entries, newTreeCookie, newTreeVerifier, eof, err := pager.ReadDirPage(ctx, dirPath, resumeCookie, resumeVerifier, maxEntries)
-	if err != nil {
-		if errors.Is(err, ErrStaleCookie) {
-			return dirPage{}, &NFSStatusError{NFSStatusBadCookie, nil}, true
-		}
-		if os.IsPermission(err) {
-			return dirPage{}, &NFSStatusError{NFSStatusAccess, err}, true
-		}
-		return dirPage{}, &NFSStatusError{NFSStatusServerFault, err}, true
-	}
-
-	// NFS cookies for actual entries start at 2 (after '.'=0 and '..'=1).
-	// On subsequent pages the first entry follows the last cookie the client
-	// echoed back.
-	firstCookie := uint64(2)
-	if cookie >= 2 {
-		firstCookie = cookie + 1
-	}
-
-	// Store the resume point for the next page, keyed by the NFS cookie of
-	// the last entry on this page.
-	nfsVerifier := hashVerifier(newTreeVerifier)
-	if len(entries) > 0 {
-		lastNFSCookie := firstCookie + uint64(len(entries)) - 1
-		table.store(nfsVerifier, lastNFSCookie, newTreeCookie, newTreeVerifier)
-	}
-
-	return dirPage{entries: entries, firstCookie: firstCookie, verifier: nfsVerifier, eof: eof}, nil, true
+	return &NFSStatusError{NFSStatusServerFault, err}
 }

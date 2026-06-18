@@ -52,20 +52,28 @@ type CachingHandler interface {
 	DataForVerifier(path string, verifier uint64) []fs.FileInfo
 }
 
-// ErrStaleCookie is returned by PagedDirHandler.ReadDirPage when the
-// resumeCookie or verifier no longer matches the directory state.  go-nfs
-// maps this to NFSStatusBadCookie so the client restarts the listing.
+// ErrStaleCookie is returned by DirIteratorHandler.OpenDir when the cookie or
+// verifier no longer matches the directory state.
 var ErrStaleCookie = errors.New("stale NFS cookie verifier")
 
-// PagedDirHandler is an optional interface for handlers that can serve
-// directory listings one page at a time without materialising the full
-// listing.  When implemented, go-nfs calls ReadDirPage instead of
-// billy.Filesystem.ReadDir.
-//
-// resumeCookie and verifier are nil for the first page, or the values
-// returned by the previous call.  They are opaque to go-nfs — the handler
-// should pass them directly to the underlying directory iterator without
-// interpreting their contents.
-type PagedDirHandler interface {
-	ReadDirPage(ctx context.Context, path string, resumeCookie, verifier []byte, maxEntries int) (entries []fs.FileInfo, newCookie, newVerifier []byte, eof bool, err error)
+// DirIterator streams directory entries one at a time. go-nfs calls Next()
+// and adds each entry to the response until the byte budget is exhausted, then
+// reads the final Cookie and Verifier to include in the response.
+type DirIterator interface {
+	Next() bool
+	FileInfo() fs.FileInfo
+	// Cookie returns the NFS cookie for the current entry.
+	Cookie() uint64
+	// Verifier returns the directory's cookie verifier. Stable throughout the lifetime of the iterator.
+	Verifier() uint64
+	Close()
+}
+
+// DirIteratorHandler is an optional interface for handlers that stream
+// directory listings entry by entry. When implemented, go-nfs calls OpenDir
+// instead of billy.Filesystem.ReadDir, eliminating the full-listing rebuild.
+// cookie and verifier are 0 for the first page, or the values from the
+// previous response.
+type DirIteratorHandler interface {
+	OpenDir(ctx context.Context, path string, cookie, verifier uint64) (DirIterator, error)
 }

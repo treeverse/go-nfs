@@ -77,16 +77,21 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 		)
 	}
 
-	if page, nfsErr, supported := getPagedListing(ctx, userHandle, w.pagedCookies, fs.Join(p...), obj.Cookie, obj.CookieVerif, maxEntities-len(entities)); supported {
-		if nfsErr != nil {
-			return nfsErr
+	if h, ok := userHandle.(DirIteratorHandler); ok {
+		it, err := h.OpenDir(ctx, fs.Join(p...), obj.Cookie, obj.CookieVerif)
+		if err != nil {
+			return parseIteratorErrors(err)
 		}
-		verifier = page.verifier
-		eof = page.eof
-		for i, e := range page.entries {
+		defer it.Close()
+		verifier = it.Verifier()
+		for it.Next() {
+			e := it.FileInfo()
+			// dirBytes: name bytes + ~20B fixed (FileID, cookie, Next, XDR length prefix).
 			dirBytes += uint32(len(e.Name()) + 20)
-			maxBytes += 512 // TODO: better estimation.
-			if dirBytes > obj.DirCount || maxBytes > obj.MaxCount {
+			// maxBytes: ~84B FileAttribute + 36B handle + ~20B base + name padded to 4B.
+			// 256 is a conservative overestimate
+			maxBytes += 256
+			if dirBytes > obj.DirCount || maxBytes > obj.MaxCount || len(entities) > maxEntities {
 				eof = false
 				break
 			}
@@ -96,7 +101,7 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 			entities = append(entities, readDirPlusEntity{
 				FileID:     attrs.Fileid,
 				Name:       []byte(e.Name()),
-				Cookie:     page.firstCookie + uint64(i),
+				Cookie:     it.Cookie(),
 				Attributes: attrs,
 				Handle:     &handle,
 				Next:       true,
