@@ -144,6 +144,8 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 	}
 	if len(entities) > 0 {
 		entities[len(entities)-1].Next = false
+		// no next for last entity
+
 		for _, e := range entities {
 			if err := xdr.Write(writer, e); err != nil {
 				return &NFSStatusError{NFSStatusServerFault, err}
