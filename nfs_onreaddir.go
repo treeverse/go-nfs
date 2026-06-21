@@ -69,8 +69,8 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 		)
 	}
 
-	maxEntities := userHandle.HandleLimit() / 2
 	eof := true
+	maxEntities := userHandle.HandleLimit() / 2
 	if h, ok := userHandle.(DirIteratorHandler); ok {
 		it, err := h.OpenDir(ctx, fs.Join(p...), obj.Cookie, obj.CookieVerif)
 		if err != nil {
@@ -85,6 +85,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 				eof = false
 				break
 			}
+
 			attrs := ToFileAttribute(e, path.Join(append(p, e.Name())...))
 			entities = append(entities, readDirEntity{
 				FileID: attrs.Fileid,

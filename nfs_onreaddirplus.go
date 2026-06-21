@@ -92,6 +92,7 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 				eof = false
 				break
 			}
+
 			filePath := joinPath(p, e.Name())
 			handle := userHandle.ToHandle(fs, filePath)
 			attrs := ToFileAttribute(e, path.Join(filePath...))
