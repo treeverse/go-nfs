@@ -48,9 +48,6 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 
 	entities := make([]readDirEntity, 0)
 	maxBytes := uint32(100) // conservative overhead measure
-	// Cap entries to half the handle cache so other open handles (parent dirs, files) aren't evicted.
-	maxEntities := userHandle.HandleLimit() / 2
-	eof := true
 	var verifier uint64
 
 	if obj.Cookie == 0 {
@@ -72,6 +69,8 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 		)
 	}
 
+	maxEntities := userHandle.HandleLimit() / 2
+	eof := true
 	if h, ok := userHandle.(DirIteratorHandler); ok {
 		it, err := h.OpenDir(ctx, fs.Join(p...), obj.Cookie, obj.CookieVerif)
 		if err != nil {

@@ -54,7 +54,6 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 	entities := make([]readDirPlusEntity, 0)
 	dirBytes := uint32(0)
 	maxBytes := uint32(100) // conservative overhead measure
-	eof := true
 	var verifier uint64
 
 	if obj.Cookie == 0 {
@@ -76,6 +75,8 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 		)
 	}
 
+	eof := true
+	maxEntities := userHandle.HandleLimit() / 2
 	if h, ok := userHandle.(DirIteratorHandler); ok {
 		it, err := h.OpenDir(ctx, fs.Join(p...), obj.Cookie, obj.CookieVerif)
 		if err != nil {
@@ -87,7 +88,7 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 			e := it.FileInfo()
 			dirBytes += uint32(len(e.Name()) + 20)
 			maxBytes += 512 // TODO: better estimation.
-			if dirBytes > obj.DirCount || maxBytes > obj.MaxCount {
+			if dirBytes > obj.DirCount || maxBytes > obj.MaxCount || len(entities) > maxEntities {
 				eof = false
 				break
 			}
@@ -120,7 +121,7 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 			if started {
 				dirBytes += uint32(len(c.Name()) + 20)
 				maxBytes += 512 // TODO: better estimation.
-				if dirBytes > obj.DirCount || maxBytes > obj.MaxCount {
+				if dirBytes > obj.DirCount || maxBytes > obj.MaxCount || len(entities) > maxEntities {
 					eof = false
 					break
 				}
