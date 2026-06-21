@@ -15,11 +15,13 @@ type OnPanic func(any)
 // RecoverPanics wraps a handler to recover from panics in its method calls.
 // It also wraps any billy.Filesystem returned by the handler's Mount or FromHandle methods
 // to ensure panics in the filesystem implementation are caught.
+// If h also implements nfs.DirIteratorHandler, the returned handler will too.
 func RecoverPanics(h nfs.Handler, onPanic OnPanic) nfs.Handler {
-	return &recoveryHandler{
-		handler: h,
-		onPanic: onPanic,
+	base := &recoveryHandler{handler: h, onPanic: onPanic}
+	if dh, ok := h.(nfs.DirIteratorHandler); ok {
+		return &recoveryHandlerWithDirIterator{recoveryHandler: base, dirHandler: dh}
 	}
+	return base
 }
 
 // recoveryHandler wraps an nfs.Handler with panic recovery.
@@ -28,6 +30,15 @@ func RecoverPanics(h nfs.Handler, onPanic OnPanic) nfs.Handler {
 type recoveryHandler struct {
 	handler nfs.Handler
 	onPanic OnPanic
+}
+
+// recoveryHandlerWithDirIterator extends recoveryHandler for handlers that also
+// implement nfs.DirIteratorHandler. It is only returned when the wrapped handler
+// actually supports streaming directory listings, so the NFS server will correctly
+// detect (or not detect) the optional interface.
+type recoveryHandlerWithDirIterator struct {
+	*recoveryHandler
+	dirHandler nfs.DirIteratorHandler
 }
 
 func (h *recoveryHandler) recover() {
@@ -92,14 +103,12 @@ func (h *recoveryHandler) HandleLimit() int {
 	return h.handler.HandleLimit()
 }
 
-// OpenDir implements nfs.DirIteratorHandler by forwarding to the wrapped
-// handler when it supports streaming directory listings.
-func (h *recoveryHandler) OpenDir(ctx context.Context, path string, cookie, verifier uint64) (nfs.DirIterator, error) {
+// OpenDir implements nfs.DirIteratorHandler for handlers that support streaming
+// directory listings. This method only exists on recoveryHandlerWithDirIterator,
+// so the NFS server's optional-interface detection works correctly.
+func (h *recoveryHandlerWithDirIterator) OpenDir(ctx context.Context, path string, cookie, verifier uint64) (nfs.DirIterator, error) {
 	defer h.recover()
-	if dh, ok := h.handler.(nfs.DirIteratorHandler); ok {
-		return dh.OpenDir(ctx, path, cookie, verifier)
-	}
-	return nil, nfs.ErrStaleCookie
+	return h.dirHandler.OpenDir(ctx, path, cookie, verifier)
 }
 
 // recoveryFilesystem wraps a billy.Filesystem with panic recovery.
