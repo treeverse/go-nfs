@@ -48,6 +48,8 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 
 	entities := make([]readDirEntity, 0)
 	maxBytes := uint32(100) // conservative overhead measure
+	// Cap entries to half the handle cache so other open handles (parent dirs, files) aren't evicted.
+	maxEntities := userHandle.HandleLimit() / 2
 	eof := true
 	var verifier uint64
 
@@ -80,7 +82,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 		for it.Next() {
 			e := it.FileInfo()
 			maxBytes += 512 // TODO: better estimation.
-			if maxBytes > obj.Count {
+			if maxBytes > obj.Count || len(entities) > maxEntities {
 				eof = false
 				break
 			}
@@ -108,7 +110,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 			cookie := uint64(i + 2)
 			if started {
 				maxBytes += 512
-				if maxBytes > obj.Count {
+				if maxBytes > obj.Count || len(entities) > maxEntities {
 					eof = false
 					break
 				}
@@ -218,7 +220,7 @@ func translateIteratorError(err error) error {
 	if errors.Is(err, ErrStaleCookie) {
 		return &NFSStatusError{NFSStatusBadCookie, nil}
 	}
-	if os.IsPermission(err) {
+	if errors.Is(err, fs.ErrPermission) {
 		return &NFSStatusError{NFSStatusAccess, err}
 	}
 	return &NFSStatusError{NFSStatusServerFault, err}
