@@ -85,11 +85,8 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 		verifier = it.Verifier()
 		for it.Next() {
 			e := it.FileInfo()
-			// dirBytes: name bytes + ~20B fixed (FileID, cookie, Next, XDR length prefix).
 			dirBytes += uint32(len(e.Name()) + 20)
-			// maxBytes: ~84B FileAttribute + 36B handle + ~20B base + name padded to 4B.
-			// 256 is a conservative overestimate
-			maxBytes += 256
+			maxBytes += 512 // TODO: better estimation.
 			if dirBytes > obj.DirCount || maxBytes > obj.MaxCount {
 				eof = false
 				break

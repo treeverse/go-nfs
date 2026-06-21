@@ -79,8 +79,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 		verifier = it.Verifier()
 		for it.Next() {
 			e := it.FileInfo()
-			// 8B FileID + 4B+name+pad + 8B Cookie + 4B Next ≈ 36B typical; 64 adds safety margin.
-			maxBytes += 64
+			maxBytes += 512 // TODO: better estimation.
 			if maxBytes > obj.Count {
 				eof = false
 				break
@@ -108,8 +107,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 			// cookie equates to index within contents + 2 (for '.' and '..')
 			cookie := uint64(i + 2)
 			if started {
-				// 8B FileID + 4B+name+pad + 8B Cookie + 4B Next ≈ 36B typical; 64 adds safety margin.
-				maxBytes += 64
+				maxBytes += 512
 				if maxBytes > obj.Count {
 					eof = false
 					break
