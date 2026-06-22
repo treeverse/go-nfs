@@ -78,7 +78,11 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 	eof := true
 	maxEntities := userHandle.HandleLimit() / 2
 	if h, ok := userHandle.(DirIteratorHandler); ok {
-		it, err := h.OpenDir(ctx, fs.Join(p...), obj.Cookie, obj.CookieVerif)
+		var serial uint64
+		if obj.Cookie >= 2 {
+			serial = obj.Cookie - 1
+		}
+		it, err := h.OpenDir(ctx, fs.Join(p...), serial, obj.CookieVerif)
 		if err != nil {
 			return translateIteratorError(err)
 		}
@@ -99,7 +103,7 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 			entities = append(entities, readDirPlusEntity{
 				FileID:     attrs.Fileid,
 				Name:       []byte(e.Name()),
-				Cookie:     it.Cookie(),
+				Cookie:     it.Cookie() + 1,
 				Attributes: attrs,
 				Handle:     &handle,
 				Next:       true,

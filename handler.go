@@ -62,7 +62,9 @@ var ErrStaleCookie = errors.New("stale NFS cookie verifier")
 type DirIterator interface {
 	Next() bool
 	FileInfo() fs.FileInfo
-	// Cookie returns the NFS cookie for the current entry.
+	// Cookie returns a serial index for the current entry. Serial indices start
+	// at 1 for the first directory entry and increment by 1. go-nfs translates
+	// these to NFS cookies internally. callers should not add their own offset.
 	Cookie() uint64
 	// Verifier returns the directory's cookie verifier. Stable throughout the lifetime of the iterator.
 	Verifier() uint64
@@ -72,8 +74,12 @@ type DirIterator interface {
 // DirIteratorHandler is an optional interface for handlers that stream
 // directory listings entry by entry. When implemented, go-nfs calls OpenDir
 // instead of billy.Filesystem.ReadDir, eliminating the full-listing rebuild.
-// cookie and verifier are 0 for the first page, or the values from the
-// previous response.
+//
+// cookie is a serial index: 0 means start from the beginning, k means resume
+// after the entry whose Cookie() returned k. go-nfs translates NFS cookies to
+// serial indices before calling OpenDir, so implementations never see the
+// NFS-reserved values 0 ("." sentinel) and 1 (".." sentinel).
+// verifier is 0 on the first page, or the value from the previous response.
 type DirIteratorHandler interface {
 	OpenDir(ctx context.Context, path string, cookie, verifier uint64) (DirIterator, error)
 }

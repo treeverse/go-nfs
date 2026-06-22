@@ -72,7 +72,14 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 	eof := true
 	maxEntities := userHandle.HandleLimit() / 2
 	if h, ok := userHandle.(DirIteratorHandler); ok {
-		it, err := h.OpenDir(ctx, fs.Join(p...), obj.Cookie, obj.CookieVerif)
+		// NFS cookies 0 and 1 are reserved for "." and "..". Translate to the
+		// serial index expected by OpenDir: serial 0 = start, serial k = resume
+		// after the entry that returned serial k.
+		var serial uint64
+		if obj.Cookie >= 2 {
+			serial = obj.Cookie - 1
+		}
+		it, err := h.OpenDir(ctx, fs.Join(p...), serial, obj.CookieVerif)
 		if err != nil {
 			return translateIteratorError(err)
 		}
@@ -90,7 +97,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 			entities = append(entities, readDirEntity{
 				FileID: attrs.Fileid,
 				Name:   []byte(e.Name()),
-				Cookie: it.Cookie(),
+				Cookie: it.Cookie() + 1, // serial to NFS cookie: skip ".." sentinel at 1
 				Next:   true,
 			})
 		}
