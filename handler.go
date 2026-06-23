@@ -62,9 +62,8 @@ var ErrStaleCookie = errors.New("stale NFS cookie verifier")
 type DirIterator interface {
 	Next() bool
 	FileInfo() fs.FileInfo
-	// Cookie returns a serial index for the current entry. Serial indices start
-	// at 1 for the first directory entry and increment by 1. go-nfs translates
-	// these to NFS cookies internally. callers must not add any offset.
+	// Cookie returns a 0-based serial index for the current entry. go-nfs
+	// translates these to NFS cookies internally. callers must not add any offset.
 	Cookie() uint64
 	// Verifier returns the directory's cookie verifier. Stable throughout the lifetime of the iterator.
 	Verifier() uint64

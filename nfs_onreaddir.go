@@ -72,14 +72,12 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 	eof := true
 	maxEntities := userHandle.HandleLimit() / 2
 	if h, ok := userHandle.(DirIteratorHandler); ok {
-		// NFS wire cookies for actual entries start at 2 (0 = ".", 1 = "..").
-		// DirIterator.Cookie() returns serial indices starting at 1 for the first
-		// entry. The mapping is: NFS cookie = serial + 1. To reverse: serial = NFS
-		// cookie - 1. A fresh listing (NFS cookie 0 or 1) maps to serial 0, which
-		// OpenDir treats as "start from the beginning".
+		// NFS wire cookies 0 and 1 are reserved for "." and "..". Subtract 2 to
+		// get the 0-based serial passed to OpenDir. Fresh listings (NFS cookie 0
+		// or 1) map to serial 0, which OpenDir treats as "start from beginning".
 		var serial uint64
 		if obj.Cookie >= 2 {
-			serial = obj.Cookie - 1
+			serial = obj.Cookie - 2
 		}
 		it, err := h.OpenDir(ctx, fs.Join(p...), serial, obj.CookieVerif)
 		if err != nil {
@@ -99,7 +97,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 			entities = append(entities, readDirEntity{
 				FileID: attrs.Fileid,
 				Name:   []byte(e.Name()),
-				Cookie: it.Cookie() + 1, // serial (>=1) → NFS cookie (>=2); 0 and 1 are "." and ".."
+				Cookie: it.Cookie() + 2, // 0-based serial → NFS cookie (>=2); 0 and 1 are "." and ".."
 				Next:   true,
 			})
 		}
