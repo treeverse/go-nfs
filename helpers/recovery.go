@@ -18,8 +18,8 @@ type OnPanic func(any)
 // If h also implements nfs.DirIteratorHandler, the returned handler will too.
 func RecoverPanics(h nfs.Handler, onPanic OnPanic) nfs.Handler {
 	base := &recoveryHandler{handler: h, onPanic: onPanic}
-	if dh, ok := h.(nfs.DirIteratorHandler); ok {
-		return &recoveryHandlerWithDirIterator{recoveryHandler: base, dirHandler: dh}
+	if _, ok := h.(nfs.DirIteratorHandler); ok {
+		return &recoveryHandlerWithDirIterator{recoveryHandler: base}
 	}
 	return base
 }
@@ -38,7 +38,6 @@ type recoveryHandler struct {
 // detect (or not detect) the optional interface.
 type recoveryHandlerWithDirIterator struct {
 	*recoveryHandler
-	dirHandler nfs.DirIteratorHandler
 }
 
 func (h *recoveryHandler) recover() {
@@ -108,7 +107,8 @@ func (h *recoveryHandler) HandleLimit() int {
 // so the NFS server's optional-interface detection works correctly.
 func (h *recoveryHandlerWithDirIterator) OpenDir(ctx context.Context, path string, cookie, verifier uint64) (nfs.DirIterator, error) {
 	defer h.recover()
-	return h.dirHandler.OpenDir(ctx, path, cookie, verifier)
+	// h.handler is a DirIteratorHandler by construction.
+	return h.handler.(nfs.DirIteratorHandler).OpenDir(ctx, path, cookie, verifier)
 }
 
 // recoveryFilesystem wraps a billy.Filesystem with panic recovery.

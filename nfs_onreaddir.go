@@ -72,9 +72,10 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 	eof := true
 	maxEntities := userHandle.HandleLimit() / 2
 	if h, ok := userHandle.(DirIteratorHandler); ok {
-		// NFS cookies 0 and 1 are reserved for "." and "..". Translate to the
-		// serial index expected by OpenDir: serial 0 = start, serial k = resume
-		// after the entry that returned serial k.
+		// NFS wire cookies for actual entries start at 2 (0 = ".", 1 = "..").
+		// DirIterator.Cookie() returns serial indices starting at 1 for the first
+		// entry.
+		// The mapping is: NFS cookie = serial + 1. To reverse: serial = NFS cookie - 1.
 		var serial uint64
 		if obj.Cookie >= 2 {
 			serial = obj.Cookie - 1
@@ -97,7 +98,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 			entities = append(entities, readDirEntity{
 				FileID: attrs.Fileid,
 				Name:   []byte(e.Name()),
-				Cookie: it.Cookie() + 1, // serial to NFS cookie: skip ".." sentinel at 1
+				Cookie: it.Cookie() + 1, // serial (>=1) → NFS cookie (>=2); 0 and 1 are "." and ".."
 				Next:   true,
 			})
 		}

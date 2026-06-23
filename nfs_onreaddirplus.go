@@ -78,6 +78,10 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 	eof := true
 	maxEntities := userHandle.HandleLimit() / 2
 	if h, ok := userHandle.(DirIteratorHandler); ok {
+		// NFS wire cookies for actual entries start at 2 (0 = ".", 1 = "..").
+		// DirIterator.Cookie() returns serial indices starting at 1 for the first
+		// entry.
+		// The mapping is: NFS cookie = serial + 1. To reverse: serial = NFS cookie - 1.
 		var serial uint64
 		if obj.Cookie >= 2 {
 			serial = obj.Cookie - 1
