@@ -64,7 +64,7 @@ type DirIterator interface {
 	FileInfo() fs.FileInfo
 	// Cookie returns a serial index for the current entry. Serial indices start
 	// at 1 for the first directory entry and increment by 1. go-nfs translates
-	// these to NFS cookies internally. callers should not add their own offset.
+	// these to NFS cookies internally. callers must not add any offset.
 	Cookie() uint64
 	// Verifier returns the directory's cookie verifier. Stable throughout the lifetime of the iterator.
 	Verifier() uint64

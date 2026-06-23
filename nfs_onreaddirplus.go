@@ -80,8 +80,9 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 	if h, ok := userHandle.(DirIteratorHandler); ok {
 		// NFS wire cookies for actual entries start at 2 (0 = ".", 1 = "..").
 		// DirIterator.Cookie() returns serial indices starting at 1 for the first
-		// entry.
-		// The mapping is: NFS cookie = serial + 1. To reverse: serial = NFS cookie - 1.
+		// entry. The mapping is: NFS cookie = serial + 1. To reverse: serial = NFS
+		// cookie - 1. A fresh listing (NFS cookie 0 or 1) maps to serial 0, which
+		// OpenDir treats as "start from the beginning".
 		var serial uint64
 		if obj.Cookie >= 2 {
 			serial = obj.Cookie - 1
@@ -107,7 +108,7 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 			entities = append(entities, readDirPlusEntity{
 				FileID:     attrs.Fileid,
 				Name:       []byte(e.Name()),
-				Cookie:     it.Cookie() + 1,
+				Cookie:     it.Cookie() + 1, // serial (>=1) → NFS cookie (>=2)
 				Attributes: attrs,
 				Handle:     &handle,
 				Next:       true,
