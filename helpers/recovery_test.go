@@ -60,6 +60,113 @@ func TestRecoverPanicsFS(t *testing.T) {
 	}
 }
 
+// panicOpsFS panics in filesystem operations. A recovered panic here must
+// surface as ErrRecoveredPanic rather than a zero-value "success" (e.g. Open
+// returning a nil file with a nil error, which the caller would dereference).
+type panicOpsFS struct {
+	billy.Filesystem
+}
+
+func (fs *panicOpsFS) Open(filename string) (billy.File, error)  { panic("open panic") }
+func (fs *panicOpsFS) Stat(filename string) (os.FileInfo, error) { panic("stat panic") }
+func (fs *panicOpsFS) Remove(filename string) error              { panic("remove panic") }
+
+func TestRecoverPanicsFilesystemError(t *testing.T) {
+	tests := []struct {
+		name      string
+		wantPanic string
+		op        func(billy.Filesystem) error
+	}{
+		{
+			name:      "Open",
+			wantPanic: "open panic",
+			op: func(fs billy.Filesystem) error {
+				_, err := fs.Open("foo")
+				return err
+			},
+		},
+		{
+			name:      "Stat",
+			wantPanic: "stat panic",
+			op: func(fs billy.Filesystem) error {
+				_, err := fs.Stat("foo")
+				return err
+			},
+		},
+		{
+			name:      "Remove",
+			wantPanic: "remove panic",
+			op: func(fs billy.Filesystem) error {
+				return fs.Remove("foo")
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := NewNullAuthHandler(&panicOpsFS{memfs.New()})
+
+			var panicked any
+			wrapped := RecoverPanics(handler, func(r any) {
+				panicked = r
+			})
+
+			_, wrappedFS, _ := wrapped.Mount(context.Background(), nil, nfs.MountRequest{})
+			err := tc.op(wrappedFS)
+
+			if panicked != tc.wantPanic {
+				t.Errorf("expected panic %q, got %v", tc.wantPanic, panicked)
+			}
+			if !errors.Is(err, ErrRecoveredPanic) {
+				t.Errorf("expected ErrRecoveredPanic, got %v", err)
+			}
+		})
+	}
+}
+
+// panicDirIterator panics in the streaming-listing methods go-nfs invokes
+// directly on the iterator returned by OpenDir.
+type panicDirIterator struct {
+	nfs.DirIterator
+}
+
+func (it *panicDirIterator) Next() bool { panic("next panic") }
+func (it *panicDirIterator) Close()     { panic("close panic") }
+
+// dirIteratorHandler implements nfs.DirIteratorHandler, handing back an iterator
+// whose methods panic.
+type dirIteratorHandler struct {
+	nfs.Handler
+}
+
+func (h *dirIteratorHandler) OpenDir(ctx context.Context, path string, cookie, verifier uint64) (nfs.DirIterator, error) {
+	return &panicDirIterator{}, nil
+}
+
+func TestRecoverPanicsDirIterator(t *testing.T) {
+	handler := &dirIteratorHandler{NewNullAuthHandler(memfs.New())}
+
+	var panicked any
+	wrapped := RecoverPanics(handler, func(r any) {
+		panicked = r
+	})
+
+	dih, ok := wrapped.(nfs.DirIteratorHandler)
+	if !ok {
+		t.Fatal("wrapped handler must implement nfs.DirIteratorHandler")
+	}
+	it, err := dih.OpenDir(context.Background(), "/", 0, 0)
+	if err != nil {
+		t.Fatalf("OpenDir: %v", err)
+	}
+
+	if it.Next() {
+		t.Error("Next() should return false after recovering a panic")
+	}
+	if panicked != "next panic" {
+		t.Errorf("expected panic 'next panic', got %v", panicked)
+	}
+}
+
 // panicFile panics in the file operations go-nfs invokes directly on the file
 // returned by Open/OpenFile (ReadAt for reads, WriteAt for writes).
 type panicFile struct {
