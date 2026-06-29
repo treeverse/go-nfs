@@ -51,21 +51,12 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusStale, err}
 	}
 
-	contents, verifier, err := getDirListingWithVerifier(userHandle, obj.Handle, obj.CookieVerif)
-	if err != nil {
-		return err
-	}
-	if obj.Cookie > 0 && obj.CookieVerif > 0 && verifier != obj.CookieVerif {
-		return &NFSStatusError{NFSStatusBadCookie, nil}
-	}
-
 	entities := make([]readDirPlusEntity, 0)
 	dirBytes := uint32(0)
 	maxBytes := uint32(100) // conservative overhead measure
+	var verifier uint64
 
-	started := obj.Cookie == 0
-	if started {
-		// add '.' and '..' to entities
+	if obj.Cookie == 0 {
 		dotdotFileID := uint64(0)
 		if len(p) > 0 {
 			dda := tryStat(fs, p[0:len(p)-1])
@@ -86,34 +77,76 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 
 	eof := true
 	maxEntities := userHandle.HandleLimit() / 2
-	fb := 0
-	fss := 0
-	for i, c := range contents {
-		// cookie equates to index within contents + 2 (for '.' and '..')
-		cookie := uint64(i + 2)
-		fb++
-		if started {
-			fss++
-			dirBytes += uint32(len(c.Name()) + 20)
+	if h, ok := userHandle.(DirIteratorHandler); ok {
+		// NFS wire cookies 0 and 1 are reserved for "." and "..". Subtract 2 to
+		// get the 0-based serial passed to OpenDir. Fresh listings (NFS cookie 0
+		// or 1) map to serial 0, which OpenDir treats as "start from beginning".
+		var serial uint64
+		if obj.Cookie >= 2 {
+			serial = obj.Cookie - 2
+		}
+		it, err := h.OpenDir(ctx, fs.Join(p...), serial, obj.CookieVerif)
+		if err != nil {
+			return translateIteratorError(err)
+		}
+		defer it.Close()
+		verifier = it.Verifier()
+		for it.Next() {
+			e := it.FileInfo()
+			dirBytes += uint32(len(e.Name()) + 20)
 			maxBytes += 512 // TODO: better estimation.
 			if dirBytes > obj.DirCount || maxBytes > obj.MaxCount || len(entities) > maxEntities {
 				eof = false
 				break
 			}
 
-			filePath := joinPath(p, c.Name())
+			filePath := joinPath(p, e.Name())
 			handle := userHandle.ToHandle(fs, filePath)
-			attrs := ToFileAttribute(c, path.Join(filePath...))
+			attrs := ToFileAttribute(e, path.Join(filePath...))
 			entities = append(entities, readDirPlusEntity{
 				FileID:     attrs.Fileid,
-				Name:       []byte(c.Name()),
-				Cookie:     cookie,
+				Name:       []byte(e.Name()),
+				Cookie:     it.Cookie() + 2, // 0-based serial → NFS cookie (>=2)
 				Attributes: attrs,
 				Handle:     &handle,
 				Next:       true,
 			})
-		} else if cookie == obj.Cookie {
-			started = true
+		}
+	} else {
+		contents, v, err := getDirListingWithVerifier(userHandle, obj.Handle, obj.CookieVerif)
+		if err != nil {
+			return err
+		}
+		if obj.Cookie > 0 && obj.CookieVerif > 0 && v != obj.CookieVerif {
+			return &NFSStatusError{NFSStatusBadCookie, nil}
+		}
+		verifier = v
+
+		started := obj.Cookie == 0
+		for i, c := range contents {
+			// cookie equates to index within contents + 2 (for '.' and '..')
+			cookie := uint64(i + 2)
+			if started {
+				dirBytes += uint32(len(c.Name()) + 20)
+				maxBytes += 512 // TODO: better estimation.
+				if dirBytes > obj.DirCount || maxBytes > obj.MaxCount || len(entities) > maxEntities {
+					eof = false
+					break
+				}
+				filePath := joinPath(p, c.Name())
+				handle := userHandle.ToHandle(fs, filePath)
+				attrs := ToFileAttribute(c, path.Join(filePath...))
+				entities = append(entities, readDirPlusEntity{
+					FileID:     attrs.Fileid,
+					Name:       []byte(c.Name()),
+					Cookie:     cookie,
+					Attributes: attrs,
+					Handle:     &handle,
+					Next:       true,
+				})
+			} else if cookie == obj.Cookie {
+				started = true
+			}
 		}
 	}
 

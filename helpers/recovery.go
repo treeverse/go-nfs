@@ -14,20 +14,22 @@ import (
 // OnPanic is a function called when a panic is recovered.
 type OnPanic func(any)
 
-// ErrRecoveredPanic is returned by a billy.File operation that recovered from a
-// panic, so a panicking read or write surfaces as an error to the caller
-// instead of an unwound stack.
+// ErrRecoveredPanic is returned by a billy.File or billy.Filesystem operation
+// that recovered from a panic, so a panicking call surfaces as an error to the
+// caller instead of an unwound stack or a zero-value "success".
 var ErrRecoveredPanic = errors.New("recovered panic")
 
 // RecoverPanics wraps a handler to recover from panics in its method calls.
 // It also wraps any billy.Filesystem returned by the handler's Mount or FromHandle
 // methods, and any billy.File those filesystems return, so panics in the
 // filesystem or file implementation are caught rather than crashing the server.
+// If h also implements nfs.DirIteratorHandler, the returned handler will too.
 func RecoverPanics(h nfs.Handler, onPanic OnPanic) nfs.Handler {
-	return &recoveryHandler{
-		handler: h,
-		onPanic: onPanic,
+	base := &recoveryHandler{handler: h, onPanic: onPanic}
+	if _, ok := h.(nfs.DirIteratorHandler); ok {
+		return &recoveryHandlerWithDirIterator{recoveryHandler: base}
 	}
+	return base
 }
 
 // recoveryHandler wraps an nfs.Handler with panic recovery.
@@ -36,6 +38,14 @@ func RecoverPanics(h nfs.Handler, onPanic OnPanic) nfs.Handler {
 type recoveryHandler struct {
 	handler nfs.Handler
 	onPanic OnPanic
+}
+
+// recoveryHandlerWithDirIterator extends recoveryHandler for handlers that also
+// implement nfs.DirIteratorHandler. It is only returned when the wrapped handler
+// actually supports streaming directory listings, so the NFS server will correctly
+// detect (or not detect) the optional interface.
+type recoveryHandlerWithDirIterator struct {
+	*recoveryHandler
 }
 
 func (h *recoveryHandler) recover() {
@@ -98,6 +108,15 @@ func (h *recoveryHandler) InvalidateHandle(fs billy.Filesystem, fh []byte) error
 func (h *recoveryHandler) HandleLimit() int {
 	defer h.recover()
 	return h.handler.HandleLimit()
+}
+
+// OpenDir implements nfs.DirIteratorHandler for handlers that support streaming
+// directory listings. This method only exists on recoveryHandlerWithDirIterator,
+// so the NFS server's optional-interface detection works correctly.
+func (h *recoveryHandlerWithDirIterator) OpenDir(ctx context.Context, path string, cookie, verifier uint64) (nfs.DirIterator, error) {
+	defer h.recover()
+	// h.handler is a DirIteratorHandler by construction.
+	return h.handler.(nfs.DirIteratorHandler).OpenDir(ctx, path, cookie, verifier)
 }
 
 // recoveryFilesystem wraps a billy.Filesystem with panic recovery.
