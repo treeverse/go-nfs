@@ -15,15 +15,13 @@ import (
 // OnPanic is a function called when a panic is recovered.
 type OnPanic func(any)
 
-// ErrRecoveredPanic is returned by a billy.File or billy.Filesystem operation
-// that recovered from a panic, so a panicking call surfaces as an error to the
-// caller instead of an unwound stack or a zero-value "success".
+// ErrRecoveredPanic is returned from a wrapped billy.File or billy.Filesystem operation
+// that panics.
 var ErrRecoveredPanic = errors.New("recovered panic")
 
 // RecoverPanics wraps a handler to recover from panics in its method calls.
 // It also wraps any billy.Filesystem returned by the handler's Mount or FromHandle
-// methods, and any billy.File those filesystems return, so panics in the
-// filesystem or file implementation are caught rather than crashing the server.
+// methods and any billy.File those filesystems return, to recover from panics and return them as errors.
 // If h also implements nfs.DirIteratorHandler, the returned handler will too.
 func RecoverPanics(h nfs.Handler, onPanic OnPanic) nfs.Handler {
 	base := &recoveryHandler{handler: h, onPanic: onPanic}

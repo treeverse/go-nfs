@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime/debug"
 
 	xdr2 "github.com/rasky/go-xdr/xdr2"
 	"github.com/willscott/go-nfs-client/nfs/rpc"
@@ -20,6 +21,8 @@ var (
 	ErrInputInvalid = errors.New("invalid input")
 	// ErrAlreadySent is returned when writing a header/status multiple times
 	ErrAlreadySent = errors.New("response already started")
+	// errHandlerPanic wraps a value recovered from a panic in a request handler.
+	errHandlerPanic = errors.New("recovered panic in handler")
 )
 
 // ResponseCode is a combination of accept_stat and reject_stat.
@@ -122,7 +125,7 @@ func (c *conn) handle(ctx context.Context, w *response) error {
 		}
 		return c.err(ctx, w, &ResponseCodeProcUnavailableError{})
 	}
-	appError := handler(ctx, w, c.Server.Handler)
+	appError := c.dispatch(ctx, w, handler)
 	if drainErr := w.drain(ctx); drainErr != nil {
 		return drainErr
 	}
@@ -138,6 +141,23 @@ func (c *conn) handle(ctx context.Context, w *response) error {
 		}
 	}
 	return nil
+}
+
+// dispatch invokes the per-procedure handler, recovering any panic so a
+// panicking handler (or a panic in a billy operation that escaped the recovery
+// helpers) fails the request instead of unwinding the serve goroutine and
+// crashing the server.  A recovered panic becomes a SERVERFAULT, which the
+// caller turns into an NFS error reply when no response has been written yet.
+func (c *conn) dispatch(ctx context.Context, w *response, handler HandleFunc) (appError error) {
+	defer func() {
+		if r := recover(); r != nil {
+			Log.Errorf("recovered panic handling %s: %v\n%s", w.req, r, debug.Stack())
+			if appError == nil {
+				appError = &NFSStatusError{NFSStatusServerFault, fmt.Errorf("%w: %v", errHandlerPanic, r)}
+			}
+		}
+	}()
+	return handler(ctx, w, c.Server.Handler)
 }
 
 func (c *conn) err(ctx context.Context, w *response, err error) error {
