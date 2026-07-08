@@ -22,7 +22,7 @@ var (
 	// ErrAlreadySent is returned when writing a header/status multiple times
 	ErrAlreadySent = errors.New("response already started")
 	// errHandlerPanic wraps a value recovered from a panic in a request handler.
-	errHandlerPanic = errors.New("recovered panic in handler")
+	errHandlerPanic = errors.New("panic")
 )
 
 // ResponseCode is a combination of accept_stat and reject_stat.

@@ -17,7 +17,7 @@ type OnPanic func(any)
 
 // ErrRecoveredPanic is returned from a wrapped billy.File or billy.Filesystem operation
 // that panics.
-var ErrRecoveredPanic = errors.New("recovered panic")
+var ErrRecoveredPanic = errors.New("panic")
 
 // RecoverPanics wraps a handler to recover from panics in its method calls.
 // It also wraps any billy.Filesystem returned by the handler's Mount or FromHandle
