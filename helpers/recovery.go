@@ -2,6 +2,9 @@ package helpers
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	iofs "io/fs"
 	"net"
 	"os"
 
@@ -12,9 +15,13 @@ import (
 // OnPanic is a function called when a panic is recovered.
 type OnPanic func(any)
 
+// ErrRecoveredPanic is returned from a wrapped billy.File or billy.Filesystem operation
+// that panics.
+var ErrRecoveredPanic = errors.New("panic")
+
 // RecoverPanics wraps a handler to recover from panics in its method calls.
-// It also wraps any billy.Filesystem returned by the handler's Mount or FromHandle methods
-// to ensure panics in the filesystem implementation are caught.
+// It also wraps any billy.Filesystem returned by the handler's Mount or FromHandle
+// methods and any billy.File those filesystems return, to recover from panics and return them as errors.
 // If h also implements nfs.DirIteratorHandler, the returned handler will too.
 func RecoverPanics(h nfs.Handler, onPanic OnPanic) nfs.Handler {
 	base := &recoveryHandler{handler: h, onPanic: onPanic}
@@ -108,7 +115,11 @@ func (h *recoveryHandler) HandleLimit() int {
 func (h *recoveryHandlerWithDirIterator) OpenDir(ctx context.Context, path string, cookie, verifier uint64) (nfs.DirIterator, error) {
 	defer h.recover()
 	// h.handler is a DirIteratorHandler by construction.
-	return h.handler.(nfs.DirIteratorHandler).OpenDir(ctx, path, cookie, verifier)
+	it, err := h.handler.(nfs.DirIteratorHandler).OpenDir(ctx, path, cookie, verifier)
+	if it != nil {
+		it = &recoveryDirIterator{DirIterator: it, onPanic: h.onPanic}
+	}
+	return it, err
 }
 
 // recoveryFilesystem wraps a billy.Filesystem with panic recovery.
@@ -125,33 +136,50 @@ func (fs *recoveryFilesystem) recover() {
 	}
 }
 
-func (fs *recoveryFilesystem) Create(filename string) (billy.File, error) {
-	defer fs.recover()
-	return fs.Filesystem.Create(filename)
+func (fs *recoveryFilesystem) recoverErr(err *error) {
+	if r := recover(); r != nil {
+		fs.onPanic(r)
+		*err = fmt.Errorf("%w: %v", ErrRecoveredPanic, r)
+	}
 }
 
-func (fs *recoveryFilesystem) Open(filename string) (billy.File, error) {
-	defer fs.recover()
-	return fs.Filesystem.Open(filename)
+func (fs *recoveryFilesystem) wrapFile(f billy.File) billy.File {
+	if f == nil {
+		return nil
+	}
+	return &recoveryFile{File: f, onPanic: fs.onPanic}
 }
 
-func (fs *recoveryFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, error) {
-	defer fs.recover()
-	return fs.Filesystem.OpenFile(filename, flag, perm)
+func (fs *recoveryFilesystem) Create(filename string) (_ billy.File, err error) {
+	defer fs.recoverErr(&err)
+	f, err := fs.Filesystem.Create(filename)
+	return fs.wrapFile(f), err
 }
 
-func (fs *recoveryFilesystem) Stat(filename string) (os.FileInfo, error) {
-	defer fs.recover()
+func (fs *recoveryFilesystem) Open(filename string) (_ billy.File, err error) {
+	defer fs.recoverErr(&err)
+	f, err := fs.Filesystem.Open(filename)
+	return fs.wrapFile(f), err
+}
+
+func (fs *recoveryFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (_ billy.File, err error) {
+	defer fs.recoverErr(&err)
+	f, err := fs.Filesystem.OpenFile(filename, flag, perm)
+	return fs.wrapFile(f), err
+}
+
+func (fs *recoveryFilesystem) Stat(filename string) (_ os.FileInfo, err error) {
+	defer fs.recoverErr(&err)
 	return fs.Filesystem.Stat(filename)
 }
 
-func (fs *recoveryFilesystem) Rename(oldpath, newpath string) error {
-	defer fs.recover()
+func (fs *recoveryFilesystem) Rename(oldpath, newpath string) (err error) {
+	defer fs.recoverErr(&err)
 	return fs.Filesystem.Rename(oldpath, newpath)
 }
 
-func (fs *recoveryFilesystem) Remove(filename string) error {
-	defer fs.recover()
+func (fs *recoveryFilesystem) Remove(filename string) (err error) {
+	defer fs.recoverErr(&err)
 	return fs.Filesystem.Remove(filename)
 }
 
@@ -160,38 +188,39 @@ func (fs *recoveryFilesystem) Join(elem ...string) string {
 	return fs.Filesystem.Join(elem...)
 }
 
-func (fs *recoveryFilesystem) TempFile(dir, prefix string) (billy.File, error) {
-	defer fs.recover()
-	return fs.Filesystem.TempFile(dir, prefix)
+func (fs *recoveryFilesystem) TempFile(dir, prefix string) (_ billy.File, err error) {
+	defer fs.recoverErr(&err)
+	f, err := fs.Filesystem.TempFile(dir, prefix)
+	return fs.wrapFile(f), err
 }
 
-func (fs *recoveryFilesystem) ReadDir(path string) ([]os.FileInfo, error) {
-	defer fs.recover()
+func (fs *recoveryFilesystem) ReadDir(path string) (_ []os.FileInfo, err error) {
+	defer fs.recoverErr(&err)
 	return fs.Filesystem.ReadDir(path)
 }
 
-func (fs *recoveryFilesystem) MkdirAll(filename string, perm os.FileMode) error {
-	defer fs.recover()
+func (fs *recoveryFilesystem) MkdirAll(filename string, perm os.FileMode) (err error) {
+	defer fs.recoverErr(&err)
 	return fs.Filesystem.MkdirAll(filename, perm)
 }
 
-func (fs *recoveryFilesystem) Lstat(filename string) (os.FileInfo, error) {
-	defer fs.recover()
+func (fs *recoveryFilesystem) Lstat(filename string) (_ os.FileInfo, err error) {
+	defer fs.recoverErr(&err)
 	return fs.Filesystem.Lstat(filename)
 }
 
-func (fs *recoveryFilesystem) Symlink(target, link string) error {
-	defer fs.recover()
+func (fs *recoveryFilesystem) Symlink(target, link string) (err error) {
+	defer fs.recoverErr(&err)
 	return fs.Filesystem.Symlink(target, link)
 }
 
-func (fs *recoveryFilesystem) Readlink(link string) (string, error) {
-	defer fs.recover()
+func (fs *recoveryFilesystem) Readlink(link string) (_ string, err error) {
+	defer fs.recoverErr(&err)
 	return fs.Filesystem.Readlink(link)
 }
 
-func (fs *recoveryFilesystem) Chroot(path string) (billy.Filesystem, error) {
-	defer fs.recover()
+func (fs *recoveryFilesystem) Chroot(path string) (_ billy.Filesystem, err error) {
+	defer fs.recoverErr(&err)
 	bfs, err := fs.Filesystem.Chroot(path)
 	if bfs != nil {
 		bfs = &recoveryFilesystem{Filesystem: bfs, onPanic: fs.onPanic}
@@ -202,4 +231,124 @@ func (fs *recoveryFilesystem) Chroot(path string) (billy.Filesystem, error) {
 func (fs *recoveryFilesystem) Root() string {
 	defer fs.recover()
 	return fs.Filesystem.Root()
+}
+
+// recoveryFile wraps a billy.File with panic recovery.  go-nfs calls ReadAt and
+// WriteAt directly on the file returned by Open/OpenFile/Create, so wrapping the
+// filesystem alone leaves those calls unprotected.  It uses explicit delegation
+// (not embedding) so the compiler forces us to implement any new methods added
+// to the interface.
+type recoveryFile struct {
+	File    billy.File
+	onPanic OnPanic
+}
+
+func (f *recoveryFile) recover() {
+	if r := recover(); r != nil {
+		f.onPanic(r)
+	}
+}
+
+func (f *recoveryFile) recoverErr(err *error) {
+	if r := recover(); r != nil {
+		f.onPanic(r)
+		*err = fmt.Errorf("%w: %v", ErrRecoveredPanic, r)
+	}
+}
+
+func (f *recoveryFile) Name() string {
+	defer f.recover()
+	return f.File.Name()
+}
+
+func (f *recoveryFile) Read(p []byte) (n int, err error) {
+	defer f.recoverErr(&err)
+	return f.File.Read(p)
+}
+
+func (f *recoveryFile) Write(p []byte) (n int, err error) {
+	defer f.recoverErr(&err)
+	return f.File.Write(p)
+}
+
+func (f *recoveryFile) ReadAt(p []byte, off int64) (n int, err error) {
+	defer f.recoverErr(&err)
+	return f.File.ReadAt(p, off)
+}
+
+func (f *recoveryFile) WriteAt(p []byte, off int64) (n int, err error) {
+	defer f.recoverErr(&err)
+	return f.File.WriteAt(p, off)
+}
+
+func (f *recoveryFile) Seek(offset int64, whence int) (ret int64, err error) {
+	defer f.recoverErr(&err)
+	return f.File.Seek(offset, whence)
+}
+
+func (f *recoveryFile) Stat() (info os.FileInfo, err error) {
+	defer f.recoverErr(&err)
+	return f.File.Stat()
+}
+
+func (f *recoveryFile) Lock() (err error) {
+	defer f.recoverErr(&err)
+	return f.File.Lock()
+}
+
+func (f *recoveryFile) Unlock() (err error) {
+	defer f.recoverErr(&err)
+	return f.File.Unlock()
+}
+
+func (f *recoveryFile) Truncate(size int64) (err error) {
+	defer f.recoverErr(&err)
+	return f.File.Truncate(size)
+}
+
+func (f *recoveryFile) Close() (err error) {
+	defer f.recoverErr(&err)
+	return f.File.Close()
+}
+
+// recoveryDirIterator wraps an nfs.DirIterator with panic recovery.  go-nfs
+// drives the iterator (Next/FileInfo/Cookie/Verifier/Close) directly while
+// streaming a directory listing, so wrapping OpenDir alone leaves those calls
+// unprotected.  A recovered panic in Next ends the listing; other methods fall
+// back to a zero value.  It uses explicit delegation (not embedding) so the
+// compiler forces us to implement any new methods added to the interface.
+type recoveryDirIterator struct {
+	DirIterator nfs.DirIterator
+	onPanic     OnPanic
+}
+
+func (it *recoveryDirIterator) recover() {
+	if r := recover(); r != nil {
+		it.onPanic(r)
+	}
+}
+
+func (it *recoveryDirIterator) Next() (ok bool) {
+	defer it.recover()
+	return it.DirIterator.Next()
+}
+
+func (it *recoveryDirIterator) FileInfo() iofs.FileInfo {
+	defer it.recover()
+	return it.DirIterator.FileInfo()
+}
+
+func (it *recoveryDirIterator) Cookie() uint64 {
+	defer it.recover()
+	return it.DirIterator.Cookie()
+}
+
+func (it *recoveryDirIterator) Verifier() uint64 {
+	defer it.recover()
+	return it.DirIterator.Verifier()
+}
+
+func (it *recoveryDirIterator) Close() {
+	defer it.recover()
+	it.DirIterator.Close()
 }
