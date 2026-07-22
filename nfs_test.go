@@ -375,3 +375,64 @@ func readDir(target *nfsc.Target, dir string) ([]*readDirEntry, error) {
 
 	return entries, nil
 }
+
+// mountTestTarget starts an in-memory NFS server backed by fs, mounts it, and returns a connected client target.
+// All resources are released via t.Cleanup.
+func mountTestTarget(t *testing.T, fs billy.Filesystem) *nfsc.Target {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := helpers.NewNullAuthHandler(fs)
+	cacheHelper := helpers.NewCachingHandler(handler, 1024)
+	go func() {
+		_ = nfs.Serve(listener, cacheHelper)
+	}()
+
+	c, err := rpc.DialTCP(listener.Addr().Network(), listener.Addr().(*net.TCPAddr).String(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+
+	var mounter nfsc.Mount
+	mounter.Client = c
+	target, err := mounter.Mount("/", rpc.AuthNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mounter.Unmount() })
+
+	return target
+}
+
+// TestRmDirRejectsNonDirectory verifies that RMDIR fails
+// when its target is not a directory, instead of deleting it.
+func TestRmDirRejectsNonDirectory(t *testing.T) {
+	mem := memfs.New()
+	// File needs to exist in the root for memfs to acknowledge the root exists.
+	r, err := mem.Create("/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	target := mountTestTarget(t, mem)
+
+	if _, err := target.Create("/file.txt", 0666); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := target.RmDir("/file.txt"); !nfsc.IsNotDirError(err) {
+		t.Fatalf("RmDir on a file: got %v, want NFS3ERR_NOTDIR", err)
+	}
+
+	if _, _, err := target.Lookup("/file.txt", false); err != nil {
+		t.Fatalf("file must survive a rejected RmDir: %v", err)
+	}
+}

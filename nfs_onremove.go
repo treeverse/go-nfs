@@ -9,7 +9,14 @@ import (
 	"github.com/willscott/go-nfs-client/nfs/xdr"
 )
 
-func onRemove(ctx context.Context, w *response, userHandle Handler) error {
+func onRemove(_ context.Context, w *response, userHandle Handler) error {
+	return removeEntry(w, userHandle, false)
+}
+
+// removeEntry implements the shared logic behind REMOVE and RMDIR:
+// it decodes a DirOpArg request and removes the named entry. When requireDir is set,
+// it fails with NFSStatusNotDir, without removing anything, if the target is not a directory.
+func removeEntry(w *response, userHandle Handler, requireDir bool) error {
 	w.errorFmt = wccDataErrorFormatter
 	obj := DirOpArg{}
 	if err := xdr.Read(w.req.Body, &obj); err != nil {
@@ -46,6 +53,25 @@ func onRemove(ctx context.Context, w *response, userHandle Handler) error {
 
 	toDelete := fs.Join(append(path, string(obj.Filename))...)
 	toDeleteHandle := userHandle.ToHandle(fs, append(path, string(obj.Filename)))
+
+	if requireDir {
+		// Best-effort check: billy exposes no atomic "remove only if a directory",
+		// so a target that changes type between this Stat and the Remove below can slip through.
+		// We keep the check immediately before Remove to keep that window as small as possible.
+		targetInfo, err := fs.Stat(toDelete)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return &NFSStatusError{NFSStatusNoEnt, err}
+			}
+			if os.IsPermission(err) {
+				return &NFSStatusError{NFSStatusAccess, err}
+			}
+			return &NFSStatusError{NFSStatusIO, err}
+		}
+		if !targetInfo.IsDir() {
+			return &NFSStatusError{NFSStatusNotDir, nil}
+		}
+	}
 
 	err = fs.Remove(toDelete)
 	if err != nil {
