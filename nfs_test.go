@@ -2,6 +2,7 @@ package nfs_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -179,6 +180,16 @@ func TestNFS(t *testing.T) {
 		t.Fatal("written does not match expected")
 	}
 
+	// RMDIR on a non-directory must fail with NFS3ERR_NOTDIR, without removing it
+	if err := target.RmDir("/helloworld.txt"); err == nil {
+		t.Fatal("expected RmDir on a file to fail")
+	} else if !nfsc.IsNotDirError(err) {
+		t.Fatalf("expected NFS3ERR_NOTDIR, got: %v", err)
+	}
+	if _, err := mem.Stat("/helloworld.txt"); err != nil {
+		t.Fatal("file removed by failed RmDir:", err)
+	}
+
 	// for test nfs.ReadDirPlus in case of many files
 	dirF1, err := mem.ReadDir("/")
 	if err != nil {
@@ -277,6 +288,57 @@ func TestNFS(t *testing.T) {
 	}
 	if len(emptyEntities) != 0 {
 		t.Fatal("nfs.ReadDir error reading empty dir")
+	}
+
+	// REMOVE on a directory must fail with NFS3ERR_ISDIR, without removing it
+	var nfsErr *nfsc.Error
+	if err := target.Remove("/empty"); err == nil {
+		t.Fatal("expected Remove on a directory to fail")
+	} else if !errors.As(err, &nfsErr) || nfsErr.ErrorNum != nfsc.NFS3ErrIsDir {
+		t.Fatalf("expected NFS3ERR_ISDIR, got: %v", err)
+	}
+	if _, err := mem.Stat("/empty"); err != nil {
+		t.Fatal("directory removed by failed Remove:", err)
+	}
+
+	// RMDIR on a non-empty directory must fail with NFS3ERR_NOTEMPTY, without removing it
+	if _, err := target.Mkdir("/nonempty", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.Create("/nonempty/file.txt", 0666); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.RmDir("/nonempty"); err == nil {
+		t.Fatal("expected RmDir on a non-empty directory to fail")
+	} else if !nfsc.IsNotEmptyError(err) {
+		t.Fatalf("expected NFS3ERR_NOTEMPTY, got: %v", err)
+	}
+	if _, err := mem.Stat("/nonempty/file.txt"); err != nil {
+		t.Fatal("directory contents removed by failed RmDir:", err)
+	}
+
+	// RMDIR and REMOVE must judge a symlink by its own type, not by what it points to:
+	// RMDIR on a symlink-to-directory must fail with NFS3ERR_NOTDIR,
+	// and REMOVE on it must succeed, removing only the link.
+	if err := target.Symlink("/empty", "/link-to-empty"); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.RmDir("/link-to-empty"); err == nil {
+		t.Fatal("expected RmDir on a symlink to fail")
+	} else if !nfsc.IsNotDirError(err) {
+		t.Fatalf("expected NFS3ERR_NOTDIR, got: %v", err)
+	}
+	if _, err := mem.Lstat("/link-to-empty"); err != nil {
+		t.Fatal("symlink removed by failed RmDir:", err)
+	}
+	if err := target.Remove("/link-to-empty"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mem.Lstat("/link-to-empty"); err == nil {
+		t.Fatal("Remove did not remove the symlink")
+	}
+	if _, err := mem.Stat("/empty"); err != nil {
+		t.Fatal("Remove of symlink affected its target:", err)
 	}
 }
 
