@@ -3,6 +3,7 @@ package nfs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 
 	"github.com/go-git/go-billy/v6"
@@ -13,6 +14,26 @@ import (
 // without removing anything, if the named entry is a directory.
 func onRemove(ctx context.Context, w *response, userHandle Handler) error {
 	return onRemoveObj(ctx, w, userHandle, false)
+}
+
+// isEmptyDir reports whether path has zero entries.
+// It uses userHandle's DirIteratorHandler when available, checking only a single entry,
+// instead of reading the full listing via fs.ReadDir.
+func isEmptyDir(ctx context.Context, userHandle Handler, fs billy.Filesystem, path string) (bool, error) {
+	if h, ok := userHandle.(DirIteratorHandler); ok {
+		it, err := h.OpenDir(ctx, path, 0, 0)
+		if err != nil {
+			return false, err
+		}
+		defer it.Close()
+		return !it.Next(), nil
+	}
+
+	contents, err := fs.ReadDir(path)
+	if err != nil {
+		return false, err
+	}
+	return len(contents) == 0, nil
 }
 
 // onRemoveObj implements the shared logic behind REMOVE and RMDIR:
@@ -83,17 +104,20 @@ func onRemoveObj(ctx context.Context, w *response, userHandle Handler, directory
 	}
 
 	if directory {
-		contents, err := fs.ReadDir(toDelete)
-		if os.IsNotExist(err) {
+		empty, err := isEmptyDir(ctx, userHandle, fs, toDelete)
+		// This error can come from a user-supplied OpenDir, which may return
+		// a wrapped os.ErrNotExist/os.ErrPermission. errors.Is sees through the
+		// wrapping; the os.IsNotExist/os.IsPermission checks elsewhere do not.
+		if errors.Is(err, os.ErrNotExist) {
 			return &NFSStatusError{NFSStatusNoEnt, err}
 		}
-		if os.IsPermission(err) {
+		if errors.Is(err, os.ErrPermission) {
 			return &NFSStatusError{NFSStatusAccess, err}
 		}
 		if err != nil {
 			return &NFSStatusError{NFSStatusIO, err}
 		}
-		if len(contents) > 0 {
+		if !empty {
 			return &NFSStatusError{NFSStatusNotEmpty, nil}
 		}
 	}
