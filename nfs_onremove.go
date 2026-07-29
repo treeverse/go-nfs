@@ -90,6 +90,8 @@ func onRemoveObj(ctx context.Context, w *response, userHandle Handler, directory
 		return &NFSStatusError{NFSStatusNoEnt, err}
 	}
 	if os.IsPermission(err) {
+		// A permission error here means an ancestor directory in toDelete's path
+		// lacks its executable permission, not that toDelete itself is inaccessible.
 		return &NFSStatusError{NFSStatusAccess, err}
 	}
 	if err != nil {
