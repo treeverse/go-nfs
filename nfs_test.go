@@ -2,13 +2,17 @@ package nfs_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math/rand"
 	"net"
 	"os"
 	"reflect"
 	"sort"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/go-git/go-billy/v6"
@@ -21,6 +25,9 @@ import (
 	"github.com/willscott/go-nfs-client/nfs/util"
 	"github.com/willscott/go-nfs-client/nfs/xdr"
 )
+
+// testCacheLimit is an arbitrary handle-cache size, large enough for these tests.
+const testCacheLimit = 1024
 
 type OpenArgs struct {
 	File string
@@ -91,17 +98,52 @@ func (f *trackingFile) Close() error {
 	return f.File.Close()
 }
 
+// serveAndMount starts an NFS server backed by handler and mounts it, registering cleanup for both.
+// Test helper shared across handler-level tests.
+func serveAndMount(t *testing.T, handler nfs.Handler) *nfsc.Target {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_ = nfs.Serve(listener, handler)
+	}()
+
+	// rpc.DialTCP binds a random local source port and, for non-privileged
+	// clients, does not retry when that port is already in use. Retry here so
+	// tests that mount several times in quick succession don't flake on a
+	// transient EADDRINUSE; a fresh random port almost always succeeds.
+	var c *rpc.Client
+	for attempt := 0; attempt < 10; attempt++ {
+		c, err = rpc.DialTCP(listener.Addr().Network(), listener.Addr().(*net.TCPAddr).String(), false)
+		if err == nil || !errors.Is(err, syscall.EADDRINUSE) {
+			break
+		}
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+
+	var mounter nfsc.Mount
+	mounter.Client = c
+	target, err := mounter.Mount("/", rpc.AuthNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mounter.Unmount() })
+
+	return target
+}
+
 func TestNFS(t *testing.T) {
 	if testing.Verbose() {
 		util.DefaultLogger.SetDebug(true)
 	}
 
 	// make an empty in-memory server.
-	listener, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	mem := NewTrackingFS(memfs.New())
 
 	defer func() {
@@ -115,28 +157,10 @@ func TestNFS(t *testing.T) {
 	r.Close()
 
 	handler := helpers.NewNullAuthHandler(mem)
-	cacheHelper := helpers.NewCachingHandler(handler, 1024)
-	go func() {
-		_ = nfs.Serve(listener, cacheHelper)
-	}()
+	cacheHelper := helpers.NewCachingHandler(handler, testCacheLimit)
+	target := serveAndMount(t, cacheHelper)
 
-	c, err := rpc.DialTCP(listener.Addr().Network(), listener.Addr().(*net.TCPAddr).String(), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-
-	var mounter nfsc.Mount
-	mounter.Client = c
-	target, err := mounter.Mount("/", rpc.AuthNull)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		_ = mounter.Unmount()
-	}()
-
-	_, err = target.FSInfo()
+	_, err := target.FSInfo()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,6 +201,16 @@ func TestNFS(t *testing.T) {
 	}
 	if !bytes.Equal(buf, b) {
 		t.Fatal("written does not match expected")
+	}
+
+	// RMDIR on a non-directory must fail with NFS3ERR_NOTDIR, without removing it
+	if err := target.RmDir("/helloworld.txt"); err == nil {
+		t.Fatal("expected RmDir on a file to fail")
+	} else if !nfsc.IsNotDirError(err) {
+		t.Fatalf("expected NFS3ERR_NOTDIR, got: %v", err)
+	}
+	if _, err := mem.Stat("/helloworld.txt"); err != nil {
+		t.Fatal("file removed by failed RmDir:", err)
 	}
 
 	// for test nfs.ReadDirPlus in case of many files
@@ -278,6 +312,177 @@ func TestNFS(t *testing.T) {
 	if len(emptyEntities) != 0 {
 		t.Fatal("nfs.ReadDir error reading empty dir")
 	}
+
+	// REMOVE on a directory must fail with NFS3ERR_ISDIR, without removing it
+	var nfsErr *nfsc.Error
+	if err := target.Remove("/empty"); err == nil {
+		t.Fatal("expected Remove on a directory to fail")
+	} else if !errors.As(err, &nfsErr) || nfsErr.ErrorNum != nfsc.NFS3ErrIsDir {
+		t.Fatalf("expected NFS3ERR_ISDIR, got: %v", err)
+	}
+	if _, err := mem.Stat("/empty"); err != nil {
+		t.Fatal("directory removed by failed Remove:", err)
+	}
+
+	// RMDIR on a non-empty directory must fail with NFS3ERR_NOTEMPTY, without removing it
+	if _, err := target.Mkdir("/nonempty", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.Create("/nonempty/file.txt", 0666); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.RmDir("/nonempty"); err == nil {
+		t.Fatal("expected RmDir on a non-empty directory to fail")
+	} else if !nfsc.IsNotEmptyError(err) {
+		t.Fatalf("expected NFS3ERR_NOTEMPTY, got: %v", err)
+	}
+	if _, err := mem.Stat("/nonempty/file.txt"); err != nil {
+		t.Fatal("directory contents removed by failed RmDir:", err)
+	}
+
+	// RMDIR and REMOVE must judge a symlink by its own type, not by what it points to:
+	// RMDIR on a symlink-to-directory must fail with NFS3ERR_NOTDIR,
+	// and REMOVE on it must succeed, removing only the link.
+	if err := target.Symlink("/empty", "/link-to-empty"); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.RmDir("/link-to-empty"); err == nil {
+		t.Fatal("expected RmDir on a symlink to fail")
+	} else if !nfsc.IsNotDirError(err) {
+		t.Fatalf("expected NFS3ERR_NOTDIR, got: %v", err)
+	}
+	if _, err := mem.Lstat("/link-to-empty"); err != nil {
+		t.Fatal("symlink removed by failed RmDir:", err)
+	}
+	if err := target.Remove("/link-to-empty"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mem.Lstat("/link-to-empty"); err == nil {
+		t.Fatal("Remove did not remove the symlink")
+	}
+	if _, err := mem.Stat("/empty"); err != nil {
+		t.Fatal("Remove of symlink affected its target:", err)
+	}
+}
+
+// fakeDirIteratorHandler wraps a Handler with a DirIteratorHandler that hands out a fakeDirIterator
+// instead of ever touching the real filesystem, so tests can prove onRemoveObj prefers it over fs.ReadDir.
+type fakeDirIteratorHandler struct {
+	nfs.Handler
+	hasEntry bool  // whether the iterated directory has any entries
+	openErr  error // if non-nil, OpenDir fails with this instead of iterating
+	opened   bool  // set once OpenDir is called
+}
+
+func (h *fakeDirIteratorHandler) OpenDir(_ context.Context, _ string, _, _ uint64) (nfs.DirIterator, error) {
+	h.opened = true
+	if h.openErr != nil {
+		return nil, h.openErr
+	}
+	return &fakeDirIterator{hasEntry: h.hasEntry}, nil
+}
+
+// newEmptyFakeDirIteratorHandler and newNonEmptyFakeDirIteratorHandler ignore
+// the requested path; their answer applies to any directory.
+func newEmptyFakeDirIteratorHandler(mem billy.Filesystem) *fakeDirIteratorHandler {
+	return &fakeDirIteratorHandler{
+		Handler: helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit),
+	}
+}
+
+func newNonEmptyFakeDirIteratorHandler(mem billy.Filesystem) *fakeDirIteratorHandler {
+	return &fakeDirIteratorHandler{
+		Handler:  helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit),
+		hasEntry: true,
+	}
+}
+
+// newErrorFakeDirIteratorHandler makes OpenDir fail with openErr.
+func newErrorFakeDirIteratorHandler(mem billy.Filesystem, openErr error) *fakeDirIteratorHandler {
+	return &fakeDirIteratorHandler{
+		Handler: helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit),
+		openErr: openErr,
+	}
+}
+
+// fakeDirIterator simulates a directory with either zero or one entry.
+type fakeDirIterator struct {
+	hasEntry bool
+	served   bool
+}
+
+func (it *fakeDirIterator) Next() bool {
+	ok := it.hasEntry && !it.served
+	it.served = true
+	return ok
+}
+
+func (it *fakeDirIterator) FileInfo() fs.FileInfo { return nil }
+func (it *fakeDirIterator) Cookie() uint64        { return 0 }
+func (it *fakeDirIterator) Verifier() uint64      { return 0 }
+func (it *fakeDirIterator) Close()                {}
+
+// TestRmdirViaDirIterator proves onRemoveObj uses DirIteratorHandler to check if the target dir is empty.
+func TestRmdirViaDirIterator(t *testing.T) {
+	t.Run("IteratorReportsNonEmpty", func(t *testing.T) {
+		mem := memfs.New()
+		if err := mem.MkdirAll("/dir", 0755); err != nil {
+			t.Fatal(err)
+		}
+
+		fakeHandler := newNonEmptyFakeDirIteratorHandler(mem)
+		target := serveAndMount(t, fakeHandler)
+
+		if err := target.RmDir("/dir"); err == nil {
+			t.Fatal("expected RmDir to fail")
+		} else if !nfsc.IsNotEmptyError(err) {
+			t.Fatalf("expected NFS3ERR_NOTEMPTY, got: %v", err)
+		}
+		if !fakeHandler.opened {
+			t.Fatal("expected onRemoveObj to use the DirIteratorHandler")
+		}
+	})
+
+	t.Run("IteratorReportsEmpty", func(t *testing.T) {
+		mem := memfs.New()
+		if err := mem.MkdirAll("/dir", 0755); err != nil {
+			t.Fatal(err)
+		}
+
+		fakeHandler := newEmptyFakeDirIteratorHandler(mem)
+		target := serveAndMount(t, fakeHandler)
+
+		if err := target.RmDir("/dir"); err != nil {
+			t.Fatalf("expected RmDir to succeed, got: %v", err)
+		}
+		if !fakeHandler.opened {
+			t.Fatal("expected onRemoveObj to use the DirIteratorHandler")
+		}
+	})
+
+	// A %w-wrapped sentinel from OpenDir (as a non-billy backend would return)
+	// must be classified by its cause, not collapsed to NFS3ERR_IO.
+	t.Run("IteratorOpenErrorMapsToNoEnt", func(t *testing.T) {
+		mem := memfs.New()
+		if err := mem.MkdirAll("/dir", 0755); err != nil {
+			t.Fatal(err)
+		}
+
+		wrapped := fmt.Errorf("open dir: %w", os.ErrNotExist)
+		fakeHandler := newErrorFakeDirIteratorHandler(mem, wrapped)
+		target := serveAndMount(t, fakeHandler)
+
+		err := target.RmDir("/dir")
+		if err == nil {
+			t.Fatal("expected RmDir to fail")
+		}
+		// The client maps NFS3ERR_NOENT to os.ErrNotExist.
+		// Before the errors.Is fix in onRemoveObj, the wrapped OpenDir error fell through to NFS3ERR_IO,
+		// which the client surfaces as a *nfsc.Error instead.
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected NFS3ERR_NOENT, got: %v", err)
+		}
+	})
 }
 
 type readDirEntry struct {
