@@ -580,3 +580,39 @@ func readDir(target *nfsc.Target, dir string) ([]*readDirEntry, error) {
 
 	return entries, nil
 }
+
+// erofsRenameFS is writable but fails every rename with EROFS.
+type erofsRenameFS struct {
+	billy.Filesystem
+}
+
+func (fs *erofsRenameFS) Rename(oldpath, newpath string) error {
+	return &os.PathError{Op: "rename", Path: oldpath, Err: syscall.EROFS}
+}
+
+// TestOperationErrorKeepsItsStatus renames on a filesystem that reports itself
+// writable but fails the rename with EROFS, and expects NFS3ERR_ROFS.
+func TestOperationErrorKeepsItsStatus(t *testing.T) {
+	mem := memfs.New()
+	f, err := mem.Create("/from.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	handler := helpers.NewCachingHandler(helpers.NewNullAuthHandler(&erofsRenameFS{mem}), testCacheLimit)
+	target := serveAndMount(t, handler)
+
+	err = target.Rename("/from.txt", "/to.txt")
+	if err == nil {
+		t.Fatal("expected rename to fail")
+	}
+	nfsErr, ok := err.(*nfsc.Error)
+	if !ok {
+		t.Fatalf("expected *nfsc.Error, got %T: %v", err, err)
+	}
+	if nfsErr.ErrorNum != uint32(nfs.NFSStatusROFS) {
+		t.Errorf("rename on read-only target reported %v (%d), want NFS3ERR_ROFS (%d)",
+			nfsErr.ErrorString, nfsErr.ErrorNum, nfs.NFSStatusROFS)
+	}
+}

@@ -52,10 +52,7 @@ func onWrite(ctx context.Context, w *response, userHandle Handler) error {
 	fullPath := fs.Join(path...)
 	info, err := fs.Stat(fullPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &NFSStatusError{NFSStatusNoEnt, err}
-		}
-		return &NFSStatusError{NFSStatusAccess, err}
+		return statusError(err, NFSStatusAccess)
 	}
 	if !info.Mode().IsRegular() {
 		return &NFSStatusError{NFSStatusInval, os.ErrInvalid}
@@ -65,7 +62,7 @@ func onWrite(ctx context.Context, w *response, userHandle Handler) error {
 	// now the actual op.
 	file, err := fs.OpenFile(fs.Join(path...), os.O_RDWR, info.Mode().Perm())
 	if err != nil {
-		return &NFSStatusError{NFSStatusAccess, err}
+		return statusError(err, NFSStatusAccess)
 	}
 	defer func() {
 		if file != nil {
@@ -84,13 +81,13 @@ func onWrite(ctx context.Context, w *response, userHandle Handler) error {
 	var writtenCount int
 
 	if writtenCount, err = file.WriteAt(req.Data[:end], int64(req.Offset)); err != nil {
-		return &NFSStatusError{NFSStatusIO, err}
+		return statusError(err, NFSStatusIO)
 	}
 	err = file.Close()
 	file = nil // No more need to close on exit.
 	if err != nil {
 		Log.Errorf("error closing: %v", err)
-		return &NFSStatusError{NFSStatusIO, err}
+		return statusError(err, NFSStatusIO)
 	}
 
 	writer := bytes.NewBuffer([]byte{})

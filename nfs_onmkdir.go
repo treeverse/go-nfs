@@ -49,21 +49,21 @@ func onMkdir(ctx context.Context, w *response, userHandle Handler) error {
 		}
 	} else {
 		if s, err := fs.Stat(fs.Join(path...)); err != nil {
-			return &NFSStatusError{NFSStatusAccess, err}
+			return statusError(err, NFSStatusAccess)
 		} else if !s.IsDir() {
 			return &NFSStatusError{NFSStatusNotDir, nil}
 		}
 	}
 
 	if err := fs.MkdirAll(newFolderPath, attrs.Mode(mkdirDefaultMode)); err != nil {
-		return &NFSStatusError{NFSStatusAccess, err}
+		return statusError(err, NFSStatusAccess)
 	}
 
 	fp := userHandle.ToHandle(fs, newFolder)
 	changer := userHandle.Change(fs)
 	if changer != nil {
 		if err := attrs.Apply(changer, fs, newFolderPath); err != nil {
-			return &NFSStatusError{NFSStatusIO, err}
+			return statusError(err, NFSStatusIO)
 		}
 	}
 

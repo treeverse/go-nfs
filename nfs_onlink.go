@@ -44,7 +44,7 @@ func onLink(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusExist, os.ErrExist}
 	}
 	if s, err := fs.Stat(fs.Join(path...)); err != nil {
-		return &NFSStatusError{NFSStatusAccess, err}
+		return statusError(err, NFSStatusAccess)
 	} else if !s.IsDir() {
 		return &NFSStatusError{NFSStatusNotDir, nil}
 	}
@@ -61,10 +61,10 @@ func onLink(ctx context.Context, w *response, userHandle Handler) error {
 
 	err = cos.Link(string(target), newFilePath)
 	if err != nil {
-		return &NFSStatusError{NFSStatusAccess, err}
+		return statusError(err, NFSStatusAccess)
 	}
 	if err := attrs.Apply(changer, fs, newFilePath); err != nil {
-		return &NFSStatusError{NFSStatusIO, err}
+		return statusError(err, NFSStatusIO)
 	}
 
 	writer := bytes.NewBuffer([]byte{})

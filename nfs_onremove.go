@@ -3,7 +3,6 @@ package nfs
 import (
 	"bytes"
 	"context"
-	"errors"
 	"os"
 
 	"github.com/go-git/go-billy/v6"
@@ -62,14 +61,8 @@ func onRemoveObj(ctx context.Context, w *response, userHandle Handler, directory
 
 	fullPath := fs.Join(path...)
 	dirInfo, err := fs.Stat(fullPath)
-	if os.IsNotExist(err) {
-		return &NFSStatusError{NFSStatusNoEnt, err}
-	}
-	if os.IsPermission(err) {
-		return &NFSStatusError{NFSStatusAccess, err}
-	}
 	if err != nil {
-		return &NFSStatusError{NFSStatusIO, err}
+		return statusError(err, NFSStatusIO)
 	}
 	if !dirInfo.IsDir() {
 		return &NFSStatusError{NFSStatusNotDir, nil}
@@ -86,16 +79,10 @@ func onRemoveObj(ctx context.Context, w *response, userHandle Handler, directory
 	// Lstat, not Stat: POSIX rmdir()/unlink() act on the entry itself, not what it points to :
 	// rmdir() must reject a symlink to an empty directory, unlink() must remove the symlink itself.
 	targetInfo, err := fs.Lstat(toDelete)
-	if os.IsNotExist(err) {
-		return &NFSStatusError{NFSStatusNoEnt, err}
-	}
-	if os.IsPermission(err) {
+	if err != nil {
 		// A permission error here means an ancestor directory in toDelete's path
 		// lacks its executable permission, not that toDelete itself is inaccessible.
-		return &NFSStatusError{NFSStatusAccess, err}
-	}
-	if err != nil {
-		return &NFSStatusError{NFSStatusIO, err}
+		return statusError(err, NFSStatusIO)
 	}
 
 	if directory && !targetInfo.IsDir() {
@@ -107,17 +94,8 @@ func onRemoveObj(ctx context.Context, w *response, userHandle Handler, directory
 
 	if directory {
 		empty, err := isEmptyDir(ctx, userHandle, fs, toDelete)
-		// This error can come from a user-supplied OpenDir, which may return
-		// a wrapped os.ErrNotExist/os.ErrPermission. errors.Is sees through the
-		// wrapping; the os.IsNotExist/os.IsPermission checks elsewhere do not.
-		if errors.Is(err, os.ErrNotExist) {
-			return &NFSStatusError{NFSStatusNoEnt, err}
-		}
-		if errors.Is(err, os.ErrPermission) {
-			return &NFSStatusError{NFSStatusAccess, err}
-		}
 		if err != nil {
-			return &NFSStatusError{NFSStatusIO, err}
+			return statusError(err, NFSStatusIO)
 		}
 		if !empty {
 			return &NFSStatusError{NFSStatusNotEmpty, nil}
@@ -125,20 +103,12 @@ func onRemoveObj(ctx context.Context, w *response, userHandle Handler, directory
 	}
 
 	err = fs.Remove(toDelete)
-	if os.IsNotExist(err) {
-		return &NFSStatusError{NFSStatusNoEnt, err}
-	}
-	if os.IsPermission(err) {
-		return &NFSStatusError{NFSStatusAccess, err}
-	}
 	if err != nil {
-		// We passed all directory/empty checks above, so an error here likely means
-		// the target changed underneath us (the TOCTOU window noted above) - e.g. a
-		// directory that just became non-empty. We report NFSStatusIO rather than
-		// trying to distinguish that case, since billy doesn't expose a portable way
-		// to recognize it.
+		// The checks above passed, so an error here means the target changed
+		// underneath us in the TOCTOU window - a directory that became non-empty,
+		// say.
 		Log.Errorf("remove %q after passing directory checks: %v", toDelete, err)
-		return &NFSStatusError{NFSStatusIO, err}
+		return statusError(err, NFSStatusIO)
 	}
 
 	if err := userHandle.InvalidateHandle(fs, toDeleteHandle); err != nil {
