@@ -48,10 +48,7 @@ func onRename(ctx context.Context, w *response, userHandle Handler) error {
 	fromDirPath := fs.Join(fromPath...)
 	fromDirInfo, err := fs.Stat(fromDirPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &NFSStatusError{NFSStatusNoEnt, err}
-		}
-		return &NFSStatusError{NFSStatusIO, err}
+		return statusError(err, NFSStatusIO)
 	}
 	if !fromDirInfo.IsDir() {
 		return &NFSStatusError{NFSStatusNotDir, nil}
@@ -61,10 +58,7 @@ func onRename(ctx context.Context, w *response, userHandle Handler) error {
 	toDirPath := fs.Join(toPath...)
 	toDirInfo, err := fs.Stat(toDirPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &NFSStatusError{NFSStatusNoEnt, err}
-		}
-		return &NFSStatusError{NFSStatusIO, err}
+		return statusError(err, NFSStatusIO)
 	}
 	if !toDirInfo.IsDir() {
 		return &NFSStatusError{NFSStatusNotDir, nil}
@@ -78,13 +72,7 @@ func onRename(ctx context.Context, w *response, userHandle Handler) error {
 
 	err = fs.Rename(fromLoc, toLoc)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &NFSStatusError{NFSStatusNoEnt, err}
-		}
-		if os.IsPermission(err) {
-			return &NFSStatusError{NFSStatusAccess, err}
-		}
-		return &NFSStatusError{NFSStatusIO, err}
+		return statusError(err, NFSStatusIO)
 	}
 
 	if err := userHandle.InvalidateHandle(fs, oldHandle); err != nil {

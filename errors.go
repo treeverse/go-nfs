@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io/fs"
+	"syscall"
 )
 
 // RPCError provides the error interface for errors thrown by
@@ -194,6 +196,57 @@ func (s *NFSStatusError) MarshalBinary() (data []byte, err error) {
 // Unwrap unpacks wrapped errors
 func (s *NFSStatusError) Unwrap() error {
 	return s.WrappedErr
+}
+
+// statusFromError translates err into the NFS status describing it, returning
+// fallback for an error it does not recognize.
+func statusFromError(err error, fallback NFSStatus) NFSStatus {
+	switch {
+	case err == nil:
+		return NFSStatusOk
+	case errors.Is(err, syscall.EROFS):
+		return NFSStatusROFS
+	case errors.Is(err, syscall.ENOSPC):
+		return NFSStatusNoSPC
+	case errors.Is(err, syscall.EDQUOT):
+		return NFSStatusDQuot
+	case errors.Is(err, syscall.ENOTEMPTY):
+		return NFSStatusNotEmpty
+	case errors.Is(err, syscall.EXDEV):
+		return NFSStatusXDev
+	case errors.Is(err, syscall.EISDIR):
+		return NFSStatusIsDir
+	case errors.Is(err, syscall.ENOTDIR):
+		return NFSStatusNotDir
+	case errors.Is(err, syscall.ENAMETOOLONG):
+		return NFSStatusNameTooLong
+	case errors.Is(err, syscall.EMLINK):
+		return NFSStatusMlink
+	case errors.Is(err, syscall.EFBIG):
+		return NFSStatusFBig
+	case errors.Is(err, syscall.ENXIO):
+		return NFSStatusNXIO
+	case errors.Is(err, syscall.EPERM):
+		return NFSStatusPerm
+	// ENOTEMPTY is also fs.ErrExist and EPERM is also fs.ErrPermission, so these
+	// sentinels come last.
+	case errors.Is(err, fs.ErrNotExist):
+		return NFSStatusNoEnt
+	case errors.Is(err, fs.ErrExist):
+		return NFSStatusExist
+	case errors.Is(err, fs.ErrPermission):
+		return NFSStatusAccess
+	case errors.Is(err, fs.ErrInvalid):
+		return NFSStatusInval
+	default:
+		return fallback
+	}
+}
+
+// statusError wraps err in the NFSStatusError describing it, falling back to
+// the given status when the error is unrecognized.
+func statusError(err error, fallback NFSStatus) *NFSStatusError {
+	return &NFSStatusError{statusFromError(err, fallback), err}
 }
 
 // StatusErrorWithBody is an NFS error with a payload.

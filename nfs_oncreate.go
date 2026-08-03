@@ -70,7 +70,7 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 		}
 	} else {
 		if s, err := fs.Stat(fs.Join(path...)); err != nil {
-			return &NFSStatusError{NFSStatusAccess, err}
+			return statusError(err, NFSStatusAccess)
 		} else if !s.IsDir() {
 			return &NFSStatusError{NFSStatusNotDir, nil}
 		}
@@ -79,18 +79,18 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 	file, err := fs.Create(newFilePath)
 	if err != nil {
 		Log.Errorf("Error Creating: %v", err)
-		return &NFSStatusError{NFSStatusAccess, err}
+		return statusError(err, NFSStatusAccess)
 	}
 	if err := file.Close(); err != nil {
 		Log.Errorf("Error Creating: %v", err)
-		return &NFSStatusError{NFSStatusAccess, err}
+		return statusError(err, NFSStatusAccess)
 	}
 
 	fp := userHandle.ToHandle(fs, newFile)
 	changer := userHandle.Change(fs)
 	if err := attrs.Apply(changer, fs, newFilePath); err != nil {
 		Log.Errorf("Error applying attributes: %v\n", err)
-		return &NFSStatusError{NFSStatusIO, err}
+		return statusError(err, NFSStatusIO)
 	}
 
 	writer := bytes.NewBuffer([]byte{})
