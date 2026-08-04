@@ -130,6 +130,14 @@ type recoveryFilesystem struct {
 	onPanic    OnPanic
 }
 
+// Capabilities passes the underlying filesystem's capabilities through, so
+// billy.CapabilityCheck on a wrapped filesystem doesn't silently fall back to
+// billy.DefaultCapabilities and report a read-only filesystem as writable.
+func (fs *recoveryFilesystem) Capabilities() billy.Capability {
+	defer fs.recover()
+	return billy.Capabilities(fs.Filesystem)
+}
+
 func (fs *recoveryFilesystem) recover() {
 	if r := recover(); r != nil {
 		fs.onPanic(r)
