@@ -14,6 +14,7 @@ func getOSFileInfo(info os.FileInfo) *FileInfo {
 		fi.UID = s.Uid
 		fi.GID = s.Gid
 		fi.Fileid = s.Ino
+		fi.FSID = uint64(s.Dev)
 		return fi
 	}
 	return nil

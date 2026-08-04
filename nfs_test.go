@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-git/go-billy/v6"
 	nfs "github.com/treeverse/go-nfs"
+	"github.com/treeverse/go-nfs/file"
 	"github.com/treeverse/go-nfs/helpers"
 	"github.com/treeverse/go-nfs/helpers/memfs"
 
@@ -614,5 +615,117 @@ func TestOperationErrorKeepsItsStatus(t *testing.T) {
 	if nfsErr.ErrorNum != uint32(nfs.NFSStatusROFS) {
 		t.Errorf("rename on read-only target reported %v (%d), want NFS3ERR_ROFS (%d)",
 			nfsErr.ErrorString, nfsErr.ErrorNum, nfs.NFSStatusROFS)
+	}
+}
+
+// TestRenameThroughRecoverPanics renames within one directory and across two,
+// through the wrappers installed in production.  The filesystem reports an
+// fsid, which is what lets onRename recognise it as one filesystem: the
+// fallback for a filesystem reporting none compares the values RecoverPanics
+// returns, and it hands out a fresh wrapper per call.
+func TestRenameThroughRecoverPanics(t *testing.T) {
+	mem := memfs.New()
+	f, err := mem.Create("/from.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := mem.MkdirAll("/dir", 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := helpers.NewCachingHandler(helpers.NewNullAuthHandler(&fixedFSID{mem, 1}), testCacheLimit)
+	wrapped := helpers.RecoverPanics(handler, func(r any) { t.Errorf("unexpected panic: %v", r) })
+	target := serveAndMount(t, wrapped)
+
+	// Within one directory, as `mv from.txt to.txt` and Linux silly-rename do.
+	if err := target.Rename("/from.txt", "/to.txt"); err != nil {
+		t.Fatalf("same-directory rename: %v", err)
+	}
+	if _, err := mem.Stat("/to.txt"); err != nil {
+		t.Fatalf("renamed file missing: %v", err)
+	}
+
+	// Across directories of the same filesystem.
+	if err := target.Rename("/to.txt", "/dir/to.txt"); err != nil {
+		t.Fatalf("cross-directory rename: %v", err)
+	}
+	if _, err := mem.Stat("/dir/to.txt"); err != nil {
+		t.Fatalf("renamed file missing: %v", err)
+	}
+}
+
+// fixedFSID reports one fsid for every entry, as a single file system does.
+type fixedFSID struct {
+	billy.Filesystem
+	fsid uint64
+}
+
+type fsidInfo struct {
+	os.FileInfo
+	info file.FileInfo
+}
+
+func (i fsidInfo) Sys() any { return &i.info }
+
+func (fs *fixedFSID) Stat(path string) (os.FileInfo, error) {
+	info, err := fs.Filesystem.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	return fsidInfo{info, file.FileInfo{Nlink: 1, FSID: fs.fsid}}, nil
+}
+
+// twoExports resolves handles under "b" to a second file system, as a server
+// exporting two file systems does.
+type twoExports struct {
+	nfs.Handler
+	b billy.Filesystem
+}
+
+func (h *twoExports) FromHandle(fh []byte) (billy.Filesystem, []string, error) {
+	fs, path, err := h.Handler.FromHandle(fh)
+	if err == nil && len(path) > 0 && path[0] == "b" {
+		fs = h.b
+	}
+	return fs, path, err
+}
+
+// RFC 1813 3.3.14 requires NFS3ERR_XDEV when the fsid of the two directories
+// differs, and a rename within one fsid to proceed.
+func TestRenameAcrossFSIDs(t *testing.T) {
+	a, b := memfs.New(), memfs.New()
+	for _, dir := range []string{"/a", "/b"} {
+		if err := a.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.MkdirAll("/b", 0755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := a.Create("/a/from.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	caching := helpers.NewCachingHandler(helpers.NewNullAuthHandler(&fixedFSID{a, 1}), testCacheLimit)
+	target := serveAndMount(t, &twoExports{caching, &fixedFSID{b, 2}})
+
+	var nfsErr *nfsc.Error
+	if err := target.Rename("/a/from.txt", "/b/from.txt"); err == nil {
+		t.Fatal("expected a rename across fsids to fail")
+	} else if !errors.As(err, &nfsErr) || nfsErr.ErrorNum != nfsc.NFS3ErrXDev {
+		t.Fatalf("expected NFS3ERR_XDEV, got: %v", err)
+	}
+	if _, err := a.Stat("/a/from.txt"); err != nil {
+		t.Fatalf("source lost after a rejected rename: %v", err)
+	}
+
+	if err := target.Rename("/a/from.txt", "/a/to.txt"); err != nil {
+		t.Fatalf("rename within one fsid: %v", err)
+	}
+	if _, err := a.Stat("/a/to.txt"); err != nil {
+		t.Fatalf("renamed file missing: %v", err)
 	}
 }
