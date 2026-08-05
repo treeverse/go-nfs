@@ -115,6 +115,7 @@ func ToFileAttribute(info os.FileInfo, filePath string) *FileAttribute {
 		f.GID = a.GID
 		f.SpecData = [2]uint32{a.Major, a.Minor}
 		f.Fileid = a.Fileid
+		f.FSID = a.FSID
 	} else {
 		hasher := fnv.New64()
 		_, _ = hasher.Write([]byte(filePath))

@@ -32,11 +32,6 @@ func onRename(ctx context.Context, w *response, userHandle Handler) error {
 	if err != nil {
 		return &NFSStatusError{NFSStatusStale, err}
 	}
-	// check the two fs are the same
-	if !reflect.DeepEqual(fs, fs2) {
-		return &NFSStatusError{NFSStatusNotSupp, os.ErrPermission}
-	}
-
 	if !billy.CapabilityCheck(fs, billy.WriteCapability) {
 		return &NFSStatusError{NFSStatusROFS, os.ErrPermission}
 	}
@@ -53,17 +48,33 @@ func onRename(ctx context.Context, w *response, userHandle Handler) error {
 	if !fromDirInfo.IsDir() {
 		return &NFSStatusError{NFSStatusNotDir, nil}
 	}
-	preCacheData := ToFileAttribute(fromDirInfo, fromDirPath).AsCache()
+	fromDirAttr := ToFileAttribute(fromDirInfo, fromDirPath)
+	preCacheData := fromDirAttr.AsCache()
 
-	toDirPath := fs.Join(toPath...)
-	toDirInfo, err := fs.Stat(toDirPath)
+	// Resolve the destination against its own filesystem: fs2 is what to.Handle
+	// named, and comparing two attributes read through fs would compare fs to
+	// itself.
+	toDirPath := fs2.Join(toPath...)
+	toDirInfo, err := fs2.Stat(toDirPath)
 	if err != nil {
 		return statusError(err, NFSStatusIO)
 	}
 	if !toDirInfo.IsDir() {
 		return &NFSStatusError{NFSStatusNotDir, nil}
 	}
-	preDestData := ToFileAttribute(toDirInfo, toDirPath).AsCache()
+	toDirAttr := ToFileAttribute(toDirInfo, toDirPath)
+	preDestData := toDirAttr.AsCache()
+
+	// RFC 1813 3.3.14: same file system means "the fsid fields in the attributes
+	// for the directories are the same".  A Filesystem that reports no fsid
+	// leaves both zero, which decides nothing, so keep comparing the
+	// filesystems for those.
+	if fromDirAttr.FSID != toDirAttr.FSID {
+		return &NFSStatusError{NFSStatusXDev, os.ErrInvalid}
+	}
+	if fromDirAttr.FSID == 0 && !reflect.DeepEqual(fs, fs2) {
+		return &NFSStatusError{NFSStatusNotSupp, os.ErrPermission}
+	}
 
 	oldHandle := userHandle.ToHandle(fs, append(fromPath, string(from.Filename)))
 

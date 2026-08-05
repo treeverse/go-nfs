@@ -9,6 +9,11 @@ type FileInfo struct {
 	Major  uint32
 	Minor  uint32
 	Fileid uint64
+	// FSID identifies the file system holding the file.  A Filesystem with no
+	// operating-system backing reports one by returning a FileInfo from
+	// os.FileInfo.Sys(); leaving it zero makes every file appear to share a
+	// single file system.
+	FSID uint64
 }
 
 // GetInfo extracts some non-standardized items from the result of a Stat call.
