@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -71,18 +70,11 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 
 	eof := true
 	maxEntities := userHandle.HandleLimit() / 2
-	if h, ok := userHandle.(DirIteratorHandler); ok {
-		// NFS wire cookies 0 and 1 are reserved for "." and "..". Subtract 2 to
-		// get the 0-based serial passed to OpenDir. Fresh listings (NFS cookie 0
-		// or 1) map to serial 0, which OpenDir treats as "start from beginning".
-		var serial uint64
-		if obj.Cookie >= 2 {
-			serial = obj.Cookie - 2
-		}
-		it, err := h.OpenDir(ctx, fs.Join(p...), serial, obj.CookieVerif)
-		if err != nil {
-			return translateIteratorError(err)
-		}
+	it, hasIterator, err := openDirIterator(ctx, userHandle, fs.Join(p...), obj.Cookie, obj.CookieVerif)
+	if err != nil {
+		return err
+	}
+	if hasIterator {
 		defer func() {
 			if it != nil {
 				it.Close()
@@ -104,6 +96,9 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 				Cookie: it.Cookie() + 2, // 0-based serial → NFS cookie (>=2); 0 and 1 are "." and ".."
 				Next:   true,
 			})
+		}
+		if err := it.Err(); err != nil {
+			return translateIteratorError(err)
 		}
 		it.Close()
 		it = nil
@@ -227,14 +222,4 @@ func hashPathAndContents(path string, contents []fs.FileInfo) uint64 {
 
 	verify := vHash.Sum(nil)[0:8]
 	return binary.BigEndian.Uint64(verify)
-}
-
-func translateIteratorError(err error) error {
-	if errors.Is(err, ErrStaleCookie) {
-		return &NFSStatusError{NFSStatusBadCookie, nil}
-	}
-	if errors.Is(err, fs.ErrPermission) {
-		return &NFSStatusError{NFSStatusAccess, err}
-	}
-	return &NFSStatusError{NFSStatusServerFault, err}
 }

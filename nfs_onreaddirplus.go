@@ -77,18 +77,11 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 
 	eof := true
 	maxEntities := userHandle.HandleLimit() / 2
-	if h, ok := userHandle.(DirIteratorHandler); ok {
-		// NFS wire cookies 0 and 1 are reserved for "." and "..". Subtract 2 to
-		// get the 0-based serial passed to OpenDir. Fresh listings (NFS cookie 0
-		// or 1) map to serial 0, which OpenDir treats as "start from beginning".
-		var serial uint64
-		if obj.Cookie >= 2 {
-			serial = obj.Cookie - 2
-		}
-		it, err := h.OpenDir(ctx, fs.Join(p...), serial, obj.CookieVerif)
-		if err != nil {
-			return translateIteratorError(err)
-		}
+	it, hasIterator, err := openDirIterator(ctx, userHandle, fs.Join(p...), obj.Cookie, obj.CookieVerif)
+	if err != nil {
+		return err
+	}
+	if hasIterator {
 		defer func() {
 			if it != nil {
 				it.Close()
@@ -118,6 +111,9 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 				entry.Handle = &handle
 			}
 			entities = append(entities, entry)
+		}
+		if err := it.Err(); err != nil {
+			return translateIteratorError(err)
 		}
 		it.Close()
 		it = nil

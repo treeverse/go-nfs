@@ -131,6 +131,7 @@ type panicDirIterator struct {
 
 func (it *panicDirIterator) Next() bool { panic("next panic") }
 func (it *panicDirIterator) Close()     { panic("close panic") }
+func (it *panicDirIterator) Err() error { return nil }
 
 // dirIteratorHandler implements nfs.DirIteratorHandler, handing back an iterator
 // whose methods panic.
@@ -164,6 +165,54 @@ func TestRecoverPanicsDirIterator(t *testing.T) {
 	}
 	if panicked != "next panic" {
 		t.Errorf("expected panic 'next panic', got %v", panicked)
+	}
+	// go-nfs reads a false from Next as the end of the listing, so the panic is
+	// only distinguishable from an empty directory through Err.
+	if err := it.Err(); !errors.Is(err, ErrRecoveredPanic) {
+		t.Errorf("expected ErrRecoveredPanic from Err(), got %v", err)
+	}
+}
+
+// errDirIterator reports a read error the way a real backend iterator does.
+type errDirIterator struct {
+	nfs.DirIterator
+	err error
+}
+
+func (it *errDirIterator) Next() bool { return false }
+func (it *errDirIterator) Close()     {}
+func (it *errDirIterator) Err() error { return it.err }
+
+// errDirIteratorHandler hands back an iterator that fails its read.
+type errDirIteratorHandler struct {
+	nfs.Handler
+	err error
+}
+
+func (h *errDirIteratorHandler) OpenDir(context.Context, string, uint64, uint64) (nfs.DirIterator, error) {
+	return &errDirIterator{err: h.err}, nil
+}
+
+// TestRecoverPanicsDirIteratorForwardsErr proves the recovery wrapper does not
+// hide the wrapped iterator's own read error: go-nfs calls Err() on the
+// outermost iterator, which is the wrapper.
+func TestRecoverPanicsDirIteratorForwardsErr(t *testing.T) {
+	readErr := errors.New("backend read failed")
+	handler := &errDirIteratorHandler{Handler: NewNullAuthHandler(memfs.New()), err: readErr}
+
+	wrapped := RecoverPanics(handler, func(r any) {
+		t.Errorf("unexpected panic: %v", r)
+	})
+
+	it, err := wrapped.(nfs.DirIteratorHandler).OpenDir(context.Background(), "/", 0, 0)
+	if err != nil {
+		t.Fatalf("OpenDir: %v", err)
+	}
+	if it.Next() {
+		t.Error("Next() should return false")
+	}
+	if err := it.Err(); !errors.Is(err, readErr) {
+		t.Errorf("expected the wrapped iterator's error, got %v", err)
 	}
 }
 

@@ -18,19 +18,26 @@ func onRemove(ctx context.Context, w *response, userHandle Handler) error {
 // isEmptyDir reports whether path has zero entries.
 // It uses userHandle's DirIteratorHandler when available, checking only a single entry,
 // instead of reading the full listing via fs.ReadDir.
+// Any error returned is already an NFS status error.
 func isEmptyDir(ctx context.Context, userHandle Handler, fs billy.Filesystem, path string) (bool, error) {
-	if h, ok := userHandle.(DirIteratorHandler); ok {
-		it, err := h.OpenDir(ctx, path, 0, 0)
-		if err != nil {
-			return false, err
-		}
+	it, hasIterator, err := openDirIterator(ctx, userHandle, path, 0, 0)
+	if err != nil {
+		return false, err
+	}
+	if hasIterator {
 		defer it.Close()
-		return !it.Next(), nil
+		// A read failure must not read as "empty": that would let RMDIR delete a
+		// directory that still has entries.
+		empty := !it.Next()
+		if err := it.Err(); err != nil {
+			return false, translateIteratorError(err)
+		}
+		return empty, nil
 	}
 
 	contents, err := fs.ReadDir(path)
 	if err != nil {
-		return false, err
+		return false, statusError(err, NFSStatusIO)
 	}
 	return len(contents) == 0, nil
 }
@@ -95,7 +102,7 @@ func onRemoveObj(ctx context.Context, w *response, userHandle Handler, directory
 	if directory {
 		empty, err := isEmptyDir(ctx, userHandle, fs, toDelete)
 		if err != nil {
-			return statusError(err, NFSStatusIO)
+			return err
 		}
 		if !empty {
 			return &NFSStatusError{NFSStatusNotEmpty, nil}
