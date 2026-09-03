@@ -61,6 +61,7 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 
 	newFile := append(path, string(obj.Filename))
 	newFilePath := fs.Join(newFile...)
+	existed := false
 	if s, err := fs.Stat(newFilePath); err == nil {
 		if s.IsDir() {
 			return &NFSStatusError{NFSStatusExist, nil}
@@ -68,6 +69,7 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 		if how == createModeGuarded {
 			return &NFSStatusError{NFSStatusExist, os.ErrPermission}
 		}
+		existed = true
 	} else {
 		if s, err := fs.Stat(fs.Join(path...)); err != nil {
 			return statusError(err, NFSStatusAccess)
@@ -88,6 +90,12 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 
 	fp := userHandle.ToHandle(fs, newFile)
 	changer := userHandle.Change(fs)
+	if existed {
+		// A file that already exists keeps its mode, ownership and times: a server over a
+		// real filesystem applies these attributes through open(O_CREAT), which ignores
+		// all but the size for an existing file.
+		attrs = &SetFileAttributes{SetSize: attrs.SetSize}
+	}
 	if err := attrs.Apply(changer, fs, newFilePath); err != nil {
 		Log.Errorf("Error applying attributes: %v\n", err)
 		return statusError(err, NFSStatusIO)
