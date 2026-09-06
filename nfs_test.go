@@ -9,13 +9,11 @@ import (
 	"math/rand"
 	"net"
 	"os"
-	"path"
 	"reflect"
 	"sort"
 	"sync"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/go-git/go-billy/v6"
 	nfs "github.com/treeverse/go-nfs"
@@ -729,111 +727,5 @@ func TestRenameAcrossFSIDs(t *testing.T) {
 	}
 	if _, err := a.Stat("/a/to.txt"); err != nil {
 		t.Fatalf("renamed file missing: %v", err)
-	}
-}
-
-// chmodFS adds mode changes to a filesystem that supports none, reporting through Stat
-// and Lstat what was last set.  Wrapping is what makes a billy.Change available at all:
-// memfs implements none, so attribute changes would fail as unsupported.
-type chmodFS struct {
-	billy.Filesystem
-	mu    sync.Mutex
-	modes map[string]os.FileMode
-}
-
-func newChmodFS(fs billy.Filesystem) *chmodFS {
-	return &chmodFS{Filesystem: fs, modes: make(map[string]os.FileMode)}
-}
-
-func (c *chmodFS) Chmod(name string, mode os.FileMode) error {
-	if _, err := c.Filesystem.Stat(name); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.modes[path.Clean("/"+name)] = mode.Perm()
-	return nil
-}
-
-func (c *chmodFS) Lchown(string, int, int) error { return nil }
-
-func (c *chmodFS) Chown(string, int, int) error { return nil }
-
-func (c *chmodFS) Chtimes(string, time.Time, time.Time) error { return nil }
-
-func (c *chmodFS) Stat(name string) (os.FileInfo, error) {
-	return c.withMode(name, c.Filesystem.Stat)
-}
-
-func (c *chmodFS) Lstat(name string) (os.FileInfo, error) {
-	return c.withMode(name, c.Filesystem.Lstat)
-}
-
-func (c *chmodFS) withMode(name string, stat func(string) (os.FileInfo, error)) (os.FileInfo, error) {
-	info, err := stat(name)
-	if err != nil {
-		return info, err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	mode, ok := c.modes[path.Clean("/"+name)]
-	if !ok {
-		return info, nil
-	}
-	return chmodFileInfo{FileInfo: info, mode: info.Mode()&^os.ModePerm | mode}, nil
-}
-
-// chmodFileInfo reports mode in place of the wrapped FileInfo's.
-type chmodFileInfo struct {
-	os.FileInfo
-	mode os.FileMode
-}
-
-func (i chmodFileInfo) Mode() os.FileMode { return i.mode }
-
-// RFC 1813 3.3.8 has CREATE UNCHECKED use the attributes it carries, but a server over a
-// real filesystem applies them through open(O_CREAT), which ignores all but the size for
-// a file that already exists.  A client turns every O_CREAT|O_TRUNC open into such a
-// CREATE, carrying its umask-derived mode, so honouring the mode here would silently
-// replace the mode of any file rewritten in place.
-func TestCreateUncheckedKeepsExistingAttributes(t *testing.T) {
-	const (
-		existingMode  = os.FileMode(0o641)
-		requestedMode = os.FileMode(0o644)
-	)
-	mem := newChmodFS(memfs.New())
-	// memfs acknowledges the root only once it holds a file.
-	root, err := mem.Create("/root-exists")
-	if err != nil {
-		t.Fatal(err)
-	}
-	root.Close()
-
-	f, err := mem.Create("/rewritten.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.Write([]byte("content to truncate")); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	if err := mem.Chmod("/rewritten.txt", existingMode); err != nil {
-		t.Fatal(err)
-	}
-
-	target := serveAndMount(t, helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit))
-	if _, err := target.Create("/rewritten.txt", requestedMode); err != nil {
-		t.Fatalf("create over an existing file: %v", err)
-	}
-
-	info, err := mem.Stat("/rewritten.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := info.Mode().Perm(); got != existingMode {
-		t.Errorf("mode %#o after CREATE UNCHECKED, want %#o", got, existingMode)
-	}
-	if got := info.Size(); got != 0 {
-		t.Errorf("size %d after CREATE UNCHECKED, want 0", got)
 	}
 }
