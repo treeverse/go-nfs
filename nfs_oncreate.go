@@ -90,7 +90,7 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 
 	fp := userHandle.ToHandle(fs, newFile)
 	changer := userHandle.Change(fs)
-	if existed {
+	if existed && attrs.SetSize != nil && *attrs.SetSize == 0 {
 		// A file that already exists keeps its mode, ownership and times: a server over a
 		// real filesystem applies these attributes through open(O_CREAT), which ignores
 		// all but the size for an existing file.
