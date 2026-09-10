@@ -91,9 +91,22 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 	fp := userHandle.ToHandle(fs, newFile)
 	changer := userHandle.Change(fs)
 	if existed {
-		// A file that already exists keeps its mode, ownership and times: a server over a
-		// real filesystem applies these attributes through open(O_CREAT), which ignores
-		// all but the size for an existing file.
+		// A file that already exists keeps its mode, ownership and times: only the size
+		// carries over.  RFC 1813 3.3.8 does not say what UNCHECKED does to a file that
+		// is already there; RFC 7530 16.16 specified it for NFSv4 - "the attributes
+		// specified by createattrs are not used, except that when a size of zero is
+		// specified, the existing file is truncated" - and Linux's nfsd does the same for
+		// NFSv3, masking the request's attributes down to the size in nfsd3_create_file():
+		// https://github.com/torvalds/linux/blob/v6.12/fs/nfsd/nfs3proc.c#L317-L325
+		//
+		// The size is carried over rather than forced to zero because the client sends a
+		// mode on every create, but a size only under O_TRUNC and then only zero:
+		// https://github.com/torvalds/linux/blob/v6.12/fs/nfs/dir.c#L2380-L2385
+		// An open(path, O_WRONLY|O_CREAT|O_APPEND) of a file that exists therefore
+		// arrives carrying a mode that must not be applied and no size at all.  SetSize
+		// is nil there, and copying the field keeps it nil: an append must not be
+		// truncated to zero, so "did not ask" has to stay distinct from "asked for zero"
+		// rather than collapsing into a literal 0.
 		attrs = &SetFileAttributes{SetSize: attrs.SetSize}
 	}
 	if err := attrs.Apply(changer, fs, newFilePath); err != nil {
