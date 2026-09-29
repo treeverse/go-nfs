@@ -336,6 +336,11 @@ func (it *recoveryDirIterator) recover() {
 	}
 }
 
+func (it *recoveryDirIterator) Handle() []byte {
+	defer it.recover()
+	return it.DirIterator.Handle()
+}
+
 func (it *recoveryDirIterator) Next() (ok bool) {
 	defer it.recover()
 	return it.DirIterator.Next()

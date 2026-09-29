@@ -83,7 +83,11 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 		if err != nil {
 			return translateIteratorError(err)
 		}
-		defer it.Close()
+		defer func() {
+			if it != nil {
+				it.Close()
+			}
+		}()
 		verifier = it.Verifier()
 		for it.Next() {
 			e := it.FileInfo()
@@ -101,6 +105,8 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 				Next:   true,
 			})
 		}
+		it.Close()
+		it = nil
 	} else {
 		contents, v, err := getDirListingWithVerifier(userHandle, obj.Handle, obj.CookieVerif)
 		if err != nil {

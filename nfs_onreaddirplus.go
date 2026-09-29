@@ -89,7 +89,11 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 		if err != nil {
 			return translateIteratorError(err)
 		}
-		defer it.Close()
+		defer func() {
+			if it != nil {
+				it.Close()
+			}
+		}()
 		verifier = it.Verifier()
 		for it.Next() {
 			e := it.FileInfo()
@@ -100,18 +104,23 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 				break
 			}
 
+			handle := it.Handle()
 			filePath := joinPath(p, e.Name())
-			handle := userHandle.ToHandle(fs, filePath)
 			attrs := ToFileAttribute(e, path.Join(filePath...))
-			entities = append(entities, readDirPlusEntity{
+			entry := readDirPlusEntity{
 				FileID:     attrs.Fileid,
 				Name:       []byte(e.Name()),
 				Cookie:     it.Cookie() + 2, // 0-based serial → NFS cookie (>=2)
 				Attributes: attrs,
-				Handle:     &handle,
 				Next:       true,
-			})
+			}
+			if len(handle) > 0 {
+				entry.Handle = &handle
+			}
+			entities = append(entities, entry)
 		}
+		it.Close()
+		it = nil
 	} else {
 		contents, v, err := getDirListingWithVerifier(userHandle, obj.Handle, obj.CookieVerif)
 		if err != nil {
