@@ -776,6 +776,47 @@ func TestReadDirPlus_Ordering(t *testing.T) {
 	}
 }
 
+// TestReadDir_Ordering verifies that ReadDir with a DirIteratorHandler does
+// not interleave calls to ToHandle or Stat with directory iteration.
+//
+// If it did happen then ReadDirPlus could attempt a recursive read lock on the data structures
+// of its Filesystem.  That would deadlock if another thread attempted to take a write lock.
+func TestReadDir_Ordering(t *testing.T) {
+	fs := memfs.New()
+
+	if err := fs.MkdirAll("/a", 0755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := fs.Create("/abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.MkdirAll("/b", 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := newInterleavedOperationsBlockingHandler(t, fs)
+	target := serveAndMount(t, handler)
+
+	entities, err := readDir(target, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// entities are already complete, just verify that we got the expected entries.
+	names := make([]string, 0, len(entities))
+	for _, entity := range entities {
+		names = append(names, entity.FileName)
+	}
+	sort.StringSlice(names).Sort()
+
+	if !reflect.DeepEqual(names, []string{"a", "abc", "b"}) {
+		t.Errorf("Got filenames %+v != [a abc b]", names)
+	}
+}
+
 // interleavedOperationsBlockingHandler wraps a Handler to fail on _any_ Stat or ToHandle calls
 // while a directory iterator is open.  It is intended to verify single-thread correctness of
 // ReadDirPlus and is not thread-safe.
