@@ -61,8 +61,9 @@ var ErrStaleCookie = errors.New("stale NFS cookie verifier")
 // reads the final Cookie and Verifier to include in the response.
 type DirIterator interface {
 	Next() bool
-	// Handle returns the handle of this entry.  This handle is stable
-	// until (at least) the iterator is Close()d.
+	// Handle returns the handle of this entry.  This handle is stable beyond the lifetime
+	// of the iterator, and FromHandle reverses it.  The returned slice is immutable -
+	// caller does not need to clone it.
 	Handle() []byte
 	FileInfo() fs.FileInfo
 	// Cookie returns a 0-based serial index for the current entry. go-nfs

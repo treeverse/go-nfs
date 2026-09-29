@@ -104,6 +104,7 @@ func (f *trackingFile) Close() error {
 // serveAndMount starts an NFS server backed by handler and mounts it, registering cleanup for both.
 // Test helper shared across handler-level tests.
 func serveAndMount(t *testing.T, handler nfs.Handler) *nfsc.Target {
+	t.Helper()
 	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
@@ -760,6 +761,9 @@ func TestReadDirPlus_Ordering(t *testing.T) {
 	target := serveAndMount(t, handler)
 
 	entities, err := target.ReadDirPlus("")
+	if err != nil {
+		t.Fatal(err)
+	}
 	// entities are already complete, just verify that we got the expected entries.
 	names := make([]string, 0, len(entities))
 	for _, entity := range entities {
@@ -800,13 +804,13 @@ func (h *interleavedOperationsBlockingHandler) Mount(ctx context.Context, conn n
 }
 
 func (h *interleavedOperationsBlockingHandler) OpenDir(ctx context.Context, path string, _, _ uint64) (nfs.DirIterator, error) {
-	h.iteratorDepth++
-
 	// Fake a DirIterator on top of a vanilla filesystem.
 	entries, err := h.fs.(billy.Dir).ReadDir(path)
 	if err != nil {
 		return nil, err
 	}
+	h.iteratorDepth++
+
 	return &depthTrackingIterator{h, entries, -1}, nil
 }
 
@@ -867,4 +871,9 @@ type depthTrackingFS struct {
 func (dfs *depthTrackingFS) Stat(filename string) (fs.FileInfo, error) {
 	dfs.handler.checkRecursiveLock("Stat", filename)
 	return dfs.Filesystem.Stat(filename)
+}
+
+func (dfs *depthTrackingFS) Lstat(filename string) (fs.FileInfo, error) {
+	dfs.handler.checkRecursiveLock("Lstat", filename)
+	return dfs.Filesystem.Lstat(filename)
 }
