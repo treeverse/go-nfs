@@ -3,12 +3,14 @@ package nfs_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io/fs"
 	"math/rand"
 	"net"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"sync"
@@ -102,8 +104,6 @@ func (f *trackingFile) Close() error {
 // serveAndMount starts an NFS server backed by handler and mounts it, registering cleanup for both.
 // Test helper shared across handler-level tests.
 func serveAndMount(t *testing.T, handler nfs.Handler) *nfsc.Target {
-	t.Helper()
-
 	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
@@ -410,6 +410,10 @@ func newErrorFakeDirIteratorHandler(mem billy.Filesystem, openErr error) *fakeDi
 type fakeDirIterator struct {
 	hasEntry bool
 	served   bool
+}
+
+func (it *fakeDirIterator) Handle() []byte {
+	return []byte("fake-handle")
 }
 
 func (it *fakeDirIterator) Next() bool {
@@ -728,4 +732,139 @@ func TestRenameAcrossFSIDs(t *testing.T) {
 	if _, err := a.Stat("/a/to.txt"); err != nil {
 		t.Fatalf("renamed file missing: %v", err)
 	}
+}
+
+// TestReadDirPlus_Ordering verifies that ReadDirPlus with a DirIteratorHandler does not
+// interleave calls to ToHandle or Stat with directory iteration.
+//
+// If it did happen then ReadDirPlus could attempt a recursive read lock on the data structures
+// of its Filesystem.  That would deadlock if another thread attempted to take a write lock.
+func TestReadDirPlus_Ordering(t *testing.T) {
+	fs := memfs.New()
+
+	if err := fs.MkdirAll("/a", 0755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := fs.Create("/abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.MkdirAll("/b", 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := newInterleavedOperationsBlockingHandler(t, fs)
+	target := serveAndMount(t, handler)
+
+	entities, err := target.ReadDirPlus("")
+	// entities are already complete, just verify that we got the expected entries.
+	names := make([]string, 0, len(entities))
+	for _, entity := range entities {
+		names = append(names, entity.FileName)
+	}
+	sort.StringSlice(names).Sort()
+
+	if !reflect.DeepEqual(names, []string{"a", "abc", "b"}) {
+		t.Errorf("Got filenames %+v != [a abc b]", names)
+	}
+}
+
+// interleavedOperationsBlockingHandler wraps a Handler to fail on _any_ Stat or ToHandle calls
+// while a directory iterator is open.  It is intended to verify single-thread correctness of
+// ReadDirPlus and is not thread-safe.
+type interleavedOperationsBlockingHandler struct {
+	nfs.Handler
+	T             *testing.T
+	fs            billy.Filesystem
+	iteratorDepth int
+	err           error
+}
+
+func newInterleavedOperationsBlockingHandler(t *testing.T, fs billy.Filesystem) nfs.Handler {
+	handler := helpers.NewNullAuthHandler(fs)
+	handler = helpers.NewCachingHandler(handler, testCacheLimit)
+	handler = &interleavedOperationsBlockingHandler{
+		Handler: handler,
+		fs:      fs,
+		T:       t,
+	}
+	return handler
+}
+
+func (h *interleavedOperationsBlockingHandler) Mount(ctx context.Context, conn net.Conn, req nfs.MountRequest) (nfs.MountStatus, billy.Filesystem, []nfs.AuthFlavor) {
+	status, fs, flavours := h.Handler.Mount(ctx, conn, req)
+	return status, &depthTrackingFS{fs, h}, flavours
+}
+
+func (h *interleavedOperationsBlockingHandler) OpenDir(ctx context.Context, path string, _, _ uint64) (nfs.DirIterator, error) {
+	h.iteratorDepth++
+
+	// Fake a DirIterator on top of a vanilla filesystem.
+	entries, err := h.fs.(billy.Dir).ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	return &depthTrackingIterator{h, entries, -1}, nil
+}
+
+func (h *interleavedOperationsBlockingHandler) ToHandle(fs billy.Filesystem, path []string) []byte {
+	h.checkRecursiveLock("ToHandle", filepath.Join(path...))
+	handle := h.Handler.ToHandle(fs, path)
+	return handle
+}
+
+func (h *interleavedOperationsBlockingHandler) IteratorClosed() {
+	h.iteratorDepth--
+}
+
+func (h *interleavedOperationsBlockingHandler) checkRecursiveLock(op string, msgs ...string) {
+	if h.iteratorDepth > 0 {
+		h.T.Errorf("Interleaved %s operation may cause recursive locks (%v)", op, msgs)
+	}
+}
+
+type depthTrackingIterator struct {
+	handler *interleavedOperationsBlockingHandler
+	entries []fs.FileInfo
+	index   int
+}
+
+func (di *depthTrackingIterator) Close() {
+	di.handler.IteratorClosed()
+}
+
+func (di *depthTrackingIterator) Next() bool {
+	di.index++
+	return di.index < len(di.entries)
+}
+
+func (di *depthTrackingIterator) Handle() []byte {
+	ret := make([]byte, 8)
+	binary.BigEndian.PutUint64(ret, uint64(di.index))
+	return ret
+}
+
+func (di *depthTrackingIterator) FileInfo() fs.FileInfo {
+	return di.entries[di.index]
+}
+
+func (di *depthTrackingIterator) Cookie() uint64 {
+	return uint64(di.index)
+}
+
+func (di *depthTrackingIterator) Verifier() uint64 {
+	return 17
+}
+
+type depthTrackingFS struct {
+	billy.Filesystem
+	handler *interleavedOperationsBlockingHandler
+}
+
+func (dfs *depthTrackingFS) Stat(filename string) (fs.FileInfo, error) {
+	dfs.handler.checkRecursiveLock("Stat", filename)
+	return dfs.Filesystem.Stat(filename)
 }

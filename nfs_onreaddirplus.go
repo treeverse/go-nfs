@@ -93,6 +93,7 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 		verifier = it.Verifier()
 		for it.Next() {
 			e := it.FileInfo()
+			handle := it.Handle()
 			dirBytes += uint32(len(e.Name()) + 20)
 			maxBytes += 512 // TODO: better estimation.
 			if dirBytes > obj.DirCount || maxBytes > obj.MaxCount || len(entities) > maxEntities {
@@ -101,7 +102,6 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 			}
 
 			filePath := joinPath(p, e.Name())
-			handle := userHandle.ToHandle(fs, filePath)
 			attrs := ToFileAttribute(e, path.Join(filePath...))
 			entities = append(entities, readDirPlusEntity{
 				FileID:     attrs.Fileid,
