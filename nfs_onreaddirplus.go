@@ -107,14 +107,17 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 			handle := it.Handle()
 			filePath := joinPath(p, e.Name())
 			attrs := ToFileAttribute(e, path.Join(filePath...))
-			entities = append(entities, readDirPlusEntity{
+			entry := readDirPlusEntity{
 				FileID:     attrs.Fileid,
 				Name:       []byte(e.Name()),
 				Cookie:     it.Cookie() + 2, // 0-based serial → NFS cookie (>=2)
 				Attributes: attrs,
-				Handle:     &handle,
 				Next:       true,
-			})
+			}
+			if len(handle) > 0 {
+				entry.Handle = &handle
+			}
+			entities = append(entities, entry)
 		}
 		it.Close()
 		it = nil

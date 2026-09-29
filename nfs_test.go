@@ -736,7 +736,7 @@ func TestRenameAcrossFSIDs(t *testing.T) {
 }
 
 // TestReadDirPlus_Ordering verifies that ReadDirPlus with a DirIteratorHandler does not
-// interleave calls to ToHandle or Stat with directory iteration.
+// interleave calls to ToHandle or (L)Stat with directory iteration.
 //
 // If it did happen then ReadDirPlus could attempt a recursive read lock on the data structures
 // of its Filesystem.  That would deadlock if another thread attempted to take a write lock.
@@ -776,10 +776,10 @@ func TestReadDirPlus_Ordering(t *testing.T) {
 	}
 }
 
-// TestReadDir_Ordering verifies that ReadDir with a DirIteratorHandler does
-// not interleave calls to ToHandle or Stat with directory iteration.
+// TestReadDir_Ordering verifies that ReadDir with a DirIteratorHandler does not interleave
+// calls to (L)Stat (or ToHandle, for that matter) with directory iteration.
 //
-// If it did happen then ReadDirPlus could attempt a recursive read lock on the data structures
+// If it did happen then ReadDir could attempt a recursive read lock on the data structures
 // of its Filesystem.  That would deadlock if another thread attempted to take a write lock.
 func TestReadDir_Ordering(t *testing.T) {
 	fs := memfs.New()
@@ -819,7 +819,7 @@ func TestReadDir_Ordering(t *testing.T) {
 
 // interleavedOperationsBlockingHandler wraps a Handler to fail on _any_ Stat or ToHandle calls
 // while a directory iterator is open.  It is intended to verify single-thread correctness of
-// ReadDirPlus and is not thread-safe.
+// ReadDir and ReadDirPlus and is not thread-safe.
 type interleavedOperationsBlockingHandler struct {
 	nfs.Handler
 	T             *testing.T
