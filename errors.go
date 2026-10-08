@@ -228,6 +228,8 @@ func statusFromError(err error, fallback NFSStatus) NFSStatus {
 		return NFSStatusNXIO
 	case errors.Is(err, syscall.EPERM):
 		return NFSStatusPerm
+	case errors.Is(err, errors.ErrUnsupported):
+		return NFSStatusNotSupp
 	// ENOTEMPTY is also fs.ErrExist and EPERM is also fs.ErrPermission, so these
 	// sentinels come last.
 	case errors.Is(err, fs.ErrNotExist):
