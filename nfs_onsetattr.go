@@ -55,7 +55,8 @@ func onSetAttr(ctx context.Context, w *response, userHandle Handler) error {
 
 	changer := userHandle.Change(fs)
 	if err := attrs.Apply(changer, fs, fs.Join(path...)); err != nil {
-		return statusError(err, NFSStatusIO)
+		// Already an nfsstatuserror
+		return err
 	}
 
 	preAttr := ToFileAttribute(info, fullPath).AsCache()

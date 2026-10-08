@@ -201,12 +201,9 @@ func (s *NFSStatusError) Unwrap() error {
 // statusFromError translates err into the NFS status describing it, returning
 // fallback for an error it does not recognize.
 func statusFromError(err error, fallback NFSStatus) NFSStatus {
-	var statusErr *NFSStatusError
 	switch {
 	case err == nil:
 		return NFSStatusOk
-	case errors.As(err, &statusErr):
-		return statusErr.NFSStatus
 	case errors.Is(err, syscall.EROFS):
 		return NFSStatusROFS
 	case errors.Is(err, syscall.ENOSPC):
