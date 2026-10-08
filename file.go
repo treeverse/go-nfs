@@ -207,7 +207,7 @@ func (s *SetFileAttributes) Apply(changer billy.Change, fs billy.Filesystem, fil
 	} else if errors.Is(err, os.ErrPermission) {
 		return &NFSStatusError{NFSStatusAccess, os.ErrPermission}
 	} else if err != nil {
-		return nil
+		return statusError(err, NFSStatusIO)
 	}
 	curr := ToFileAttribute(curOS, file)
 
