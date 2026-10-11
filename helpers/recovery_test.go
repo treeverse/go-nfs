@@ -131,20 +131,19 @@ type panicDirIterator struct {
 
 func (it *panicDirIterator) Next() bool { panic("next panic") }
 func (it *panicDirIterator) Close()     { panic("close panic") }
-func (it *panicDirIterator) Err() error { return nil }
 
-// dirIteratorHandler implements nfs.DirIteratorHandler, handing back an iterator
-// whose methods panic.
+// dirIteratorHandler implements nfs.DirIteratorHandler, handing back it.
 type dirIteratorHandler struct {
 	nfs.Handler
+	it nfs.DirIterator
 }
 
 func (h *dirIteratorHandler) OpenDir(ctx context.Context, path string, cookie, verifier uint64) (nfs.DirIterator, error) {
-	return &panicDirIterator{}, nil
+	return h.it, nil
 }
 
 func TestRecoverPanicsDirIterator(t *testing.T) {
-	handler := &dirIteratorHandler{NewNullAuthHandler(memfs.New())}
+	handler := &dirIteratorHandler{Handler: NewNullAuthHandler(memfs.New()), it: &panicDirIterator{}}
 
 	var panicked any
 	wrapped := RecoverPanics(handler, func(r any) {
@@ -180,25 +179,14 @@ type errDirIterator struct {
 }
 
 func (it *errDirIterator) Next() bool { return false }
-func (it *errDirIterator) Close()     {}
 func (it *errDirIterator) Err() error { return it.err }
-
-// errDirIteratorHandler hands back an iterator that fails its read.
-type errDirIteratorHandler struct {
-	nfs.Handler
-	err error
-}
-
-func (h *errDirIteratorHandler) OpenDir(context.Context, string, uint64, uint64) (nfs.DirIterator, error) {
-	return &errDirIterator{err: h.err}, nil
-}
 
 // TestRecoverPanicsDirIteratorForwardsErr proves the recovery wrapper does not
 // hide the wrapped iterator's own read error: go-nfs calls Err() on the
 // outermost iterator, which is the wrapper.
 func TestRecoverPanicsDirIteratorForwardsErr(t *testing.T) {
 	readErr := errors.New("backend read failed")
-	handler := &errDirIteratorHandler{Handler: NewNullAuthHandler(memfs.New()), err: readErr}
+	handler := &dirIteratorHandler{Handler: NewNullAuthHandler(memfs.New()), it: &errDirIterator{err: readErr}}
 
 	wrapped := RecoverPanics(handler, func(r any) {
 		t.Errorf("unexpected panic: %v", r)

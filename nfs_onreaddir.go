@@ -97,8 +97,10 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 				Next:   true,
 			})
 		}
-		if err := it.Err(); err != nil {
-			return translateIteratorError(err)
+		if eof {
+			if err := it.Err(); err != nil {
+				return translateIteratorError(err)
+			}
 		}
 		it.Close()
 		it = nil

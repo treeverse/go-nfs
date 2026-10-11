@@ -26,13 +26,13 @@ func isEmptyDir(ctx context.Context, userHandle Handler, fs billy.Filesystem, pa
 	}
 	if hasIterator {
 		defer it.Close()
-		// A read failure must not read as "empty": that would let RMDIR delete a
-		// directory that still has entries.
-		empty := !it.Next()
-		if err := it.Err(); err != nil {
-			return false, translateIteratorError(err)
+		if it.Next() {
+			return false, nil
 		}
-		return empty, nil
+		if err := it.Err(); err != nil {
+			return false, statusError(err, NFSStatusIO)
+		}
+		return true, nil
 	}
 
 	contents, err := fs.ReadDir(path)

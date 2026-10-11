@@ -112,8 +112,10 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 			}
 			entities = append(entities, entry)
 		}
-		if err := it.Err(); err != nil {
-			return translateIteratorError(err)
+		if eof {
+			if err := it.Err(); err != nil {
+				return translateIteratorError(err)
+			}
 		}
 		it.Close()
 		it = nil

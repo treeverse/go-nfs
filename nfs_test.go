@@ -499,17 +499,31 @@ func TestRmdirViaDirIterator(t *testing.T) {
 			t.Fatal("expected RmDir to fail")
 		}
 		// The client maps NFS3ERR_NOENT to os.ErrNotExist.
-		// Before the errors.Is fix in onRemoveObj, the wrapped OpenDir error fell through to NFS3ERR_IO,
-		// which the client surfaces as a *nfsc.Error instead.
 		if !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("expected NFS3ERR_NOENT, got: %v", err)
 		}
 	})
+
+	t.Run("IteratorReadFails", func(t *testing.T) {
+		mem := memfs.New()
+		if err := mem.MkdirAll("/dir", 0755); err != nil {
+			t.Fatal(err)
+		}
+
+		fakeHandler := newReadErrorFakeDirIteratorHandler(mem, errors.New("backend read failed"))
+		target := serveAndMount(t, fakeHandler)
+
+		if err := target.RmDir("/dir"); err == nil {
+			t.Fatal("expected RmDir to fail")
+		}
+		if _, err := mem.Stat("/dir"); err != nil {
+			t.Fatal("directory removed despite an unreadable listing:", err)
+		}
+	})
 }
 
-// TestDirIteratorReadError proves a DirIterator read failure is not mistaken for
-// the end of the listing: RMDIR must not delete a directory it could not read,
-// and READDIR must fail rather than return a short listing marked EOF.
+// TestDirIteratorReadError proves READDIR and READDIRPLUS fail on a DirIterator
+// read error rather than return a short listing marked EOF.
 func TestDirIteratorReadError(t *testing.T) {
 	readErr := errors.New("backend read failed")
 
@@ -517,10 +531,6 @@ func TestDirIteratorReadError(t *testing.T) {
 		name string
 		op   func(*nfsc.Target) error
 	}{
-		{
-			name: "Rmdir",
-			op:   func(target *nfsc.Target) error { return target.RmDir("/dir") },
-		},
 		{
 			name: "ReadDir",
 			op: func(target *nfsc.Target) error {
@@ -548,9 +558,6 @@ func TestDirIteratorReadError(t *testing.T) {
 
 			if err := tc.op(target); err == nil {
 				t.Error("expected the iterator read error to surface")
-			}
-			if _, err := mem.Stat("/dir"); err != nil {
-				t.Error("directory removed despite an unreadable listing:", err)
 			}
 		})
 	}

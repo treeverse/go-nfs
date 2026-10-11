@@ -16,9 +16,6 @@ func openDirIterator(ctx context.Context, userHandle Handler, path string, cooki
 	if !ok {
 		return nil, false, nil
 	}
-	// NFS wire cookies 0 and 1 are reserved for "." and "..". Subtract 2 to get
-	// the 0-based serial passed to OpenDir. Fresh listings (NFS cookie 0 or 1)
-	// map to serial 0, which OpenDir treats as "start from beginning".
 	var serial uint64
 	if cookie >= 2 {
 		serial = cookie - 2
