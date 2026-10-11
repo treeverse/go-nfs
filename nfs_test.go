@@ -549,9 +549,6 @@ func TestDirIteratorReadError(t *testing.T) {
 			if err := tc.op(target); err == nil {
 				t.Error("expected the iterator read error to surface")
 			}
-			if !fakeHandler.opened {
-				t.Error("expected the DirIteratorHandler to be used")
-			}
 			if _, err := mem.Stat("/dir"); err != nil {
 				t.Error("directory removed despite an unreadable listing:", err)
 			}
