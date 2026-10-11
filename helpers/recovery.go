@@ -343,33 +343,24 @@ func (it *recoveryDirIterator) Handle() []byte {
 	return it.DirIterator.Handle()
 }
 
-// recoverErr records a recovered panic for Err to report.  go-nfs reads a false
-// from Next as the end of the listing, so a panic there is otherwise invisible.
-func (it *recoveryDirIterator) recoverErr() {
-	if r := recover(); r != nil {
-		it.onPanic(r)
-		it.err = fmt.Errorf("%w: %v", ErrRecoveredPanic, r)
-	}
-}
-
-// recoverErrTo reports a recovered panic through err, so a panicking Err still
-// answers with an error rather than a nil "read succeeded".
-func (it *recoveryDirIterator) recoverErrTo(err *error) {
+func (it *recoveryDirIterator) recoverErr(err *error) {
 	if r := recover(); r != nil {
 		it.onPanic(r)
 		*err = fmt.Errorf("%w: %v", ErrRecoveredPanic, r)
 	}
 }
 
+// Next records a recovered panic for Err: go-nfs reads a false from Next as the
+// end of the listing, so the panic is otherwise invisible.
 func (it *recoveryDirIterator) Next() (ok bool) {
-	defer it.recoverErr()
+	defer it.recoverErr(&it.err)
 	return it.DirIterator.Next()
 }
 
 // Err reports a panic recovered from Next, or the wrapped iterator's own read
 // error.
 func (it *recoveryDirIterator) Err() (err error) {
-	defer it.recoverErrTo(&err)
+	defer it.recoverErr(&err)
 	if it.err != nil {
 		return it.err
 	}

@@ -67,8 +67,7 @@ type DirIterator interface {
 	Handle() []byte
 	// Err returns the error that stopped the iteration, or nil if it reached the
 	// end of the directory. go-nfs calls it once Next returns false: without it a
-	// failed read is indistinguishable from an exhausted listing, and a partial
-	// listing would be served as if it were complete.
+	// failed read is indistinguishable from an exhausted listing.
 	Err() error
 	FileInfo() fs.FileInfo
 	// Cookie returns a 0-based serial index for the current entry. go-nfs
