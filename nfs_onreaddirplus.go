@@ -112,10 +112,8 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 			}
 			entities = append(entities, entry)
 		}
-		if eof {
-			if err := it.Err(); err != nil {
-				return statusError(err, NFSStatusServerFault)
-			}
+		if err := it.Err(); err != nil {
+			return statusError(err, NFSStatusServerFault)
 		}
 		it.Close()
 		it = nil

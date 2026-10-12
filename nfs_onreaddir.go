@@ -97,10 +97,8 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 				Next:   true,
 			})
 		}
-		if eof {
-			if err := it.Err(); err != nil {
-				return statusError(err, NFSStatusServerFault)
-			}
+		if err := it.Err(); err != nil {
+			return statusError(err, NFSStatusServerFault)
 		}
 		it.Close()
 		it = nil
