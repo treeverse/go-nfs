@@ -53,8 +53,8 @@ func onUMount(ctx context.Context, w *response, userHandle Handler) error {
 	if err != nil {
 		return err
 	}
-	if w.Server.OnUnmount != nil {
-		w.Server.OnUnmount(string(dirpath))
+	if h, ok := userHandle.(UnmountHandler); ok {
+		h.Unmount(ctx, w.conn, MountRequest{Header: w.req.Header, Dirpath: dirpath})
 	}
 
 	return w.writeHeader(ResponseCodeSuccess)

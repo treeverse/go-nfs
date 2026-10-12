@@ -105,19 +105,19 @@ func (f *trackingFile) Close() error {
 // serveAndMount starts an NFS server backed by handler and mounts it, registering cleanup for both.
 // Test helper shared across handler-level tests.
 func serveAndMount(t *testing.T, handler nfs.Handler) *nfsc.Target {
-	target, _ := serveServerAndMount(t, &nfs.Server{Handler: handler})
+	target, _ := serveAndMountClient(t, handler)
 	return target
 }
 
-// serveServerAndMount starts srv and mounts it, registering cleanup for both.
-func serveServerAndMount(t *testing.T, srv *nfs.Server) (*nfsc.Target, *nfsc.Mount) {
+// serveAndMountClient is serveAndMount that also returns the mount client.
+func serveAndMountClient(t *testing.T, handler nfs.Handler) (*nfsc.Target, *nfsc.Mount) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	go func() {
-		_ = srv.Serve(listener)
+		_ = nfs.Serve(listener, handler)
 	}()
 
 	// rpc.DialTCP binds a random local source port and, for non-privileged
@@ -146,29 +146,40 @@ func serveServerAndMount(t *testing.T, srv *nfs.Server) (*nfsc.Target, *nfsc.Mou
 	return target, mounter
 }
 
-func TestOnUnmount(t *testing.T) {
+// unmountRecorder is a handler that reports each MOUNTPROC_UMNT it is told of.
+type unmountRecorder struct {
+	nfs.Handler
+	unmounted chan string
+}
+
+func (h unmountRecorder) Unmount(_ context.Context, _ net.Conn, req nfs.MountRequest) {
+	h.unmounted <- string(req.Dirpath)
+}
+
+// TestUnmountThroughRecoverPanics checks that a client's MOUNTPROC_UMNT reaches the handler
+// through the wrapper installed in production.
+func TestUnmountThroughRecoverPanics(t *testing.T) {
 	mem := memfs.New()
 	f, err := mem.Create("/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.Close()
-	unmounted := make(chan string, 1)
-	srv := &nfs.Server{
+	recorder := unmountRecorder{
 		Handler:   helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit),
-		OnUnmount: func(dirpath string) { unmounted <- dirpath },
+		unmounted: make(chan string, 1),
 	}
-	_, mounter := serveServerAndMount(t, srv)
+	_, mounter := serveAndMountClient(t, helpers.RecoverPanics(recorder, func(r any) { t.Errorf("panic: %v", r) }))
 	if err := mounter.Unmount(); err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case got := <-unmounted:
+	case got := <-recorder.unmounted:
 		if got != "/" {
-			t.Errorf("OnUnmount(%q), want \"/\"", got)
+			t.Errorf("Unmount(%q), want \"/\"", got)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("OnUnmount not called")
+		t.Fatal("Unmount not called")
 	}
 }
 
