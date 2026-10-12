@@ -195,6 +195,11 @@ func TestRecoverPanicsDirIterator(t *testing.T) {
 	if panicked != "next panic" {
 		t.Errorf("expected panic 'next panic', got %v", panicked)
 	}
+	// go-nfs reads a false from Next as the end of the listing, so the panic is
+	// only distinguishable from an empty directory through Err.
+	if err := it.Err(); !errors.Is(err, ErrRecoveredPanic) {
+		t.Errorf("expected ErrRecoveredPanic from Err(), got %v", err)
+	}
 }
 
 // panicFile panics in the file operations go-nfs invokes directly on the file

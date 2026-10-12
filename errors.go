@@ -243,6 +243,8 @@ func statusFromError(err error, fallback NFSStatus) NFSStatus {
 		return NFSStatusAccess
 	case errors.Is(err, fs.ErrInvalid):
 		return NFSStatusInval
+	case errors.Is(err, ErrStaleCookie):
+		return NFSStatusBadCookie
 	default:
 		return fallback
 	}

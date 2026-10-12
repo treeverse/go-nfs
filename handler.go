@@ -65,6 +65,8 @@ type DirIterator interface {
 	// of the iterator, and FromHandle reverses it.  The returned slice is immutable -
 	// caller does not need to clone it.
 	Handle() []byte
+	// Err returns the error that stopped the iteration.
+	Err() error
 	FileInfo() fs.FileInfo
 	// Cookie returns a 0-based serial index for the current entry. go-nfs
 	// translates these to NFS cookies internally. callers must not add any offset.

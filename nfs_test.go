@@ -404,6 +404,7 @@ type fakeDirIteratorHandler struct {
 	nfs.Handler
 	hasEntry bool  // whether the iterated directory has any entries
 	openErr  error // if non-nil, OpenDir fails with this instead of iterating
+	readErr  error // if non-nil, the iterator reports this from Err() and yields no entries
 	opened   bool  // set once OpenDir is called
 }
 
@@ -412,7 +413,7 @@ func (h *fakeDirIteratorHandler) OpenDir(_ context.Context, _ string, _, _ uint6
 	if h.openErr != nil {
 		return nil, h.openErr
 	}
-	return &fakeDirIterator{hasEntry: h.hasEntry}, nil
+	return &fakeDirIterator{hasEntry: h.hasEntry, readErr: h.readErr}, nil
 }
 
 // newEmptyFakeDirIteratorHandler and newNonEmptyFakeDirIteratorHandler ignore
@@ -430,6 +431,15 @@ func newNonEmptyFakeDirIteratorHandler(mem billy.Filesystem) *fakeDirIteratorHan
 	}
 }
 
+// newReadErrorFakeDirIteratorHandler makes the iterator fail its read with readErr,
+// yielding no entries.
+func newReadErrorFakeDirIteratorHandler(mem billy.Filesystem, readErr error) *fakeDirIteratorHandler {
+	return &fakeDirIteratorHandler{
+		Handler: helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit),
+		readErr: readErr,
+	}
+}
+
 // newErrorFakeDirIteratorHandler makes OpenDir fail with openErr.
 func newErrorFakeDirIteratorHandler(mem billy.Filesystem, openErr error) *fakeDirIteratorHandler {
 	return &fakeDirIteratorHandler{
@@ -438,10 +448,12 @@ func newErrorFakeDirIteratorHandler(mem billy.Filesystem, openErr error) *fakeDi
 	}
 }
 
-// fakeDirIterator simulates a directory with either zero or one entry.
+// fakeDirIterator simulates a directory with either zero or one entry,
+// optionally failing its read.
 type fakeDirIterator struct {
 	hasEntry bool
 	served   bool
+	readErr  error
 }
 
 func (it *fakeDirIterator) Handle() []byte {
@@ -449,6 +461,9 @@ func (it *fakeDirIterator) Handle() []byte {
 }
 
 func (it *fakeDirIterator) Next() bool {
+	if it.readErr != nil {
+		return false
+	}
 	ok := it.hasEntry && !it.served
 	it.served = true
 	return ok
@@ -458,6 +473,7 @@ func (it *fakeDirIterator) FileInfo() fs.FileInfo { return nil }
 func (it *fakeDirIterator) Cookie() uint64        { return 0 }
 func (it *fakeDirIterator) Verifier() uint64      { return 0 }
 func (it *fakeDirIterator) Close()                {}
+func (it *fakeDirIterator) Err() error            { return it.readErr }
 
 // TestRmdirViaDirIterator proves onRemoveObj uses DirIteratorHandler to check if the target dir is empty.
 func TestRmdirViaDirIterator(t *testing.T) {
@@ -514,12 +530,65 @@ func TestRmdirViaDirIterator(t *testing.T) {
 			t.Fatal("expected RmDir to fail")
 		}
 		// The client maps NFS3ERR_NOENT to os.ErrNotExist.
-		// Before the errors.Is fix in onRemoveObj, the wrapped OpenDir error fell through to NFS3ERR_IO,
-		// which the client surfaces as a *nfsc.Error instead.
 		if !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("expected NFS3ERR_NOENT, got: %v", err)
 		}
 	})
+
+	t.Run("IteratorReadFails", func(t *testing.T) {
+		mem := memfs.New()
+		if err := mem.MkdirAll("/dir", 0755); err != nil {
+			t.Fatal(err)
+		}
+
+		fakeHandler := newReadErrorFakeDirIteratorHandler(mem, errors.New("backend read failed"))
+		target := serveAndMount(t, fakeHandler)
+
+		if err := target.RmDir("/dir"); err == nil {
+			t.Fatal("expected RmDir to fail")
+		}
+	})
+}
+
+// TestDirIteratorReadError proves READDIR and READDIRPLUS fail on a DirIterator
+// read error rather than return a short listing marked EOF.
+func TestDirIteratorReadError(t *testing.T) {
+	readErr := errors.New("backend read failed")
+
+	tests := []struct {
+		name string
+		op   func(*nfsc.Target) error
+	}{
+		{
+			name: "ReadDir",
+			op: func(target *nfsc.Target) error {
+				_, err := readDir(target, "/dir")
+				return err
+			},
+		},
+		{
+			name: "ReadDirPlus",
+			op: func(target *nfsc.Target) error {
+				_, err := target.ReadDirPlus("/dir")
+				return err
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mem := memfs.New()
+			if err := mem.MkdirAll("/dir", 0755); err != nil {
+				t.Fatal(err)
+			}
+
+			fakeHandler := newReadErrorFakeDirIteratorHandler(mem, readErr)
+			target := serveAndMount(t, fakeHandler)
+
+			if err := tc.op(target); err == nil {
+				t.Error("expected the iterator read error to surface")
+			}
+		})
+	}
 }
 
 type readDirEntry struct {
@@ -915,6 +984,10 @@ func (di *depthTrackingIterator) Close() {
 func (di *depthTrackingIterator) Next() bool {
 	di.index++
 	return di.index < len(di.entries)
+}
+
+func (di *depthTrackingIterator) Err() error {
+	return nil
 }
 
 func (di *depthTrackingIterator) Handle() []byte {

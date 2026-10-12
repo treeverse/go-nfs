@@ -25,7 +25,10 @@ func isEmptyDir(ctx context.Context, userHandle Handler, fs billy.Filesystem, pa
 			return false, err
 		}
 		defer it.Close()
-		return !it.Next(), nil
+		if it.Next() {
+			return false, nil
+		}
+		return true, it.Err()
 	}
 
 	contents, err := fs.ReadDir(path)

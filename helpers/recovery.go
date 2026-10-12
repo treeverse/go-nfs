@@ -336,12 +336,14 @@ func (f *recoveryFile) Close() (err error) {
 // recoveryDirIterator wraps an nfs.DirIterator with panic recovery.  go-nfs
 // drives the iterator (Next/FileInfo/Cookie/Verifier/Close) directly while
 // streaming a directory listing, so wrapping OpenDir alone leaves those calls
-// unprotected.  A recovered panic in Next ends the listing; other methods fall
-// back to a zero value.  It uses explicit delegation (not embedding) so the
-// compiler forces us to implement any new methods added to the interface.
+// unprotected.  A recovered panic in Next ends the listing and is reported by
+// Err; other methods fall back to a zero value.  It uses explicit delegation
+// (not embedding) so the compiler forces us to implement any new methods added
+// to the interface.
 type recoveryDirIterator struct {
 	DirIterator nfs.DirIterator
 	onPanic     OnPanic
+	err         error
 }
 
 func (it *recoveryDirIterator) recover() {
@@ -355,9 +357,28 @@ func (it *recoveryDirIterator) Handle() []byte {
 	return it.DirIterator.Handle()
 }
 
+func (it *recoveryDirIterator) recoverErr(err *error) {
+	if r := recover(); r != nil {
+		it.onPanic(r)
+		*err = fmt.Errorf("%w: %v", ErrRecoveredPanic, r)
+	}
+}
+
+// Next records a recovered panic for Err: go-nfs reads a false from Next as the
+// end of the listing, so the panic is otherwise invisible.
 func (it *recoveryDirIterator) Next() (ok bool) {
-	defer it.recover()
+	defer it.recoverErr(&it.err)
 	return it.DirIterator.Next()
+}
+
+// Err reports a panic recovered from Next, or the wrapped iterator's own read
+// error.
+func (it *recoveryDirIterator) Err() (err error) {
+	defer it.recoverErr(&err)
+	if it.err != nil {
+		return it.err
+	}
+	return it.DirIterator.Err()
 }
 
 func (it *recoveryDirIterator) FileInfo() iofs.FileInfo {
