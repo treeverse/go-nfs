@@ -65,9 +65,7 @@ type DirIterator interface {
 	// of the iterator, and FromHandle reverses it.  The returned slice is immutable -
 	// caller does not need to clone it.
 	Handle() []byte
-	// Err returns the error that stopped the iteration, or nil if it reached the
-	// end of the directory. go-nfs calls it once Next returns false: without it a
-	// failed read is indistinguishable from an exhausted listing.
+	// Err returns the error that stopped the iteration.
 	Err() error
 	FileInfo() fs.FileInfo
 	// Cookie returns a 0-based serial index for the current entry. go-nfs

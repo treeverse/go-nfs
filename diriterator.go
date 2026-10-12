@@ -1,9 +1,6 @@
 package nfs
 
-import (
-	"context"
-	"errors"
-)
+import "context"
 
 // openDirIterator opens a streaming iterator over the directory at path, when
 // userHandle supports one.  ok is false if it does not, leaving the caller to
@@ -22,17 +19,7 @@ func openDirIterator(ctx context.Context, userHandle Handler, path string, cooki
 	}
 	it, err = h.OpenDir(ctx, path, serial, verifier)
 	if err != nil {
-		return nil, true, translateIteratorError(err)
+		return nil, true, statusError(err, NFSStatusServerFault)
 	}
 	return it, true, nil
-}
-
-// translateIteratorError wraps a DirIterator or OpenDir failure in the NFS
-// status describing its cause, so a %w-wrapped sentinel from a non-billy
-// backend is not collapsed into the fallback status.
-func translateIteratorError(err error) error {
-	if errors.Is(err, ErrStaleCookie) {
-		return &NFSStatusError{NFSStatusBadCookie, nil}
-	}
-	return statusError(err, NFSStatusServerFault)
 }

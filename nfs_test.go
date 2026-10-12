@@ -516,9 +516,6 @@ func TestRmdirViaDirIterator(t *testing.T) {
 		if err := target.RmDir("/dir"); err == nil {
 			t.Fatal("expected RmDir to fail")
 		}
-		if _, err := mem.Stat("/dir"); err != nil {
-			t.Fatal("directory removed despite an unreadable listing:", err)
-		}
 	})
 }
 

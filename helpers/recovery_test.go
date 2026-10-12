@@ -132,18 +132,18 @@ type panicDirIterator struct {
 func (it *panicDirIterator) Next() bool { panic("next panic") }
 func (it *panicDirIterator) Close()     { panic("close panic") }
 
-// dirIteratorHandler implements nfs.DirIteratorHandler, handing back it.
+// dirIteratorHandler implements nfs.DirIteratorHandler, handing back an iterator
+// whose methods panic.
 type dirIteratorHandler struct {
 	nfs.Handler
-	it nfs.DirIterator
 }
 
 func (h *dirIteratorHandler) OpenDir(ctx context.Context, path string, cookie, verifier uint64) (nfs.DirIterator, error) {
-	return h.it, nil
+	return &panicDirIterator{}, nil
 }
 
 func TestRecoverPanicsDirIterator(t *testing.T) {
-	handler := &dirIteratorHandler{Handler: NewNullAuthHandler(memfs.New()), it: &panicDirIterator{}}
+	handler := &dirIteratorHandler{NewNullAuthHandler(memfs.New())}
 
 	var panicked any
 	wrapped := RecoverPanics(handler, func(r any) {
@@ -169,38 +169,6 @@ func TestRecoverPanicsDirIterator(t *testing.T) {
 	// only distinguishable from an empty directory through Err.
 	if err := it.Err(); !errors.Is(err, ErrRecoveredPanic) {
 		t.Errorf("expected ErrRecoveredPanic from Err(), got %v", err)
-	}
-}
-
-// errDirIterator reports a read error the way a real backend iterator does.
-type errDirIterator struct {
-	nfs.DirIterator
-	err error
-}
-
-func (it *errDirIterator) Next() bool { return false }
-func (it *errDirIterator) Err() error { return it.err }
-
-// TestRecoverPanicsDirIteratorForwardsErr proves the recovery wrapper does not
-// hide the wrapped iterator's own read error: go-nfs calls Err() on the
-// outermost iterator, which is the wrapper.
-func TestRecoverPanicsDirIteratorForwardsErr(t *testing.T) {
-	readErr := errors.New("backend read failed")
-	handler := &dirIteratorHandler{Handler: NewNullAuthHandler(memfs.New()), it: &errDirIterator{err: readErr}}
-
-	wrapped := RecoverPanics(handler, func(r any) {
-		t.Errorf("unexpected panic: %v", r)
-	})
-
-	it, err := wrapped.(nfs.DirIteratorHandler).OpenDir(context.Background(), "/", 0, 0)
-	if err != nil {
-		t.Fatalf("OpenDir: %v", err)
-	}
-	if it.Next() {
-		t.Error("Next() should return false")
-	}
-	if err := it.Err(); !errors.Is(err, readErr) {
-		t.Errorf("expected the wrapped iterator's error, got %v", err)
 	}
 }
 

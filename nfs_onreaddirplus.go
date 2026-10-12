@@ -114,7 +114,7 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 		}
 		if eof {
 			if err := it.Err(); err != nil {
-				return translateIteratorError(err)
+				return statusError(err, NFSStatusServerFault)
 			}
 		}
 		it.Close()
