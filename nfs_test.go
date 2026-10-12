@@ -109,7 +109,6 @@ func serveAndMount(t *testing.T, handler nfs.Handler) *nfsc.Target {
 	return target
 }
 
-// serveAndMountClient is serveAndMount that also returns the mount client.
 func serveAndMountClient(t *testing.T, handler nfs.Handler) (*nfsc.Target, *nfsc.Mount) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "localhost:0")
@@ -146,7 +145,6 @@ func serveAndMountClient(t *testing.T, handler nfs.Handler) (*nfsc.Target, *nfsc
 	return target, mounter
 }
 
-// unmountRecorder is a handler that reports each MOUNTPROC_UMNT it is told of.
 type unmountRecorder struct {
 	nfs.Handler
 	unmounted chan string
@@ -156,8 +154,6 @@ func (h unmountRecorder) Unmount(_ context.Context, _ net.Conn, req nfs.MountReq
 	h.unmounted <- string(req.Dirpath)
 }
 
-// TestUnmountThroughRecoverPanics checks that a client's MOUNTPROC_UMNT reaches the handler
-// through the wrapper installed in production.
 func TestUnmountThroughRecoverPanics(t *testing.T) {
 	mem := memfs.New()
 	f, err := mem.Create("/test")

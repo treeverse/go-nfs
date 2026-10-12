@@ -62,8 +62,7 @@ func (h *recoveryHandler) Mount(ctx context.Context, conn net.Conn, req nfs.Moun
 	return
 }
 
-// Unmount implements nfs.UnmountHandler.  It only notifies, so unlike OpenDir it can exist on
-// every wrapper and forward to handlers that implement it.
+// Unmount only notifies, so unlike OpenDir every wrapper can forward it.
 func (h *recoveryHandler) Unmount(ctx context.Context, conn net.Conn, req nfs.MountRequest) {
 	defer h.recover()
 	if u, ok := h.handler.(nfs.UnmountHandler); ok {

@@ -87,8 +87,7 @@ type DirIteratorHandler interface {
 	OpenDir(ctx context.Context, path string, cookie, verifier uint64) (DirIterator, error)
 }
 
-// UnmountHandler is an optional interface for handlers told when a client sends
-// MOUNTPROC_UMNT.  The call is advisory: clients do not send it on every unmount.
+// UnmountHandler is told of each MOUNTPROC_UMNT, which clients may skip.
 type UnmountHandler interface {
 	Unmount(ctx context.Context, conn net.Conn, req MountRequest)
 }
