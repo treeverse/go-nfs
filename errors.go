@@ -156,16 +156,17 @@ func (r *ResponseCodeSystemError) MarshalBinary() (data []byte, err error) {
 }
 
 // basicErrorFormatter is the default error handler for response errors.
-// If the error is already formatted, it is directly written.  An unrecognized
-// error is reported as the NFS status SERVERFAULT inside an accepted reply, not
-// as an RPC-level fault: an RPC fault means the request itself was malformed,
-// which some clients (macOS reports EBADRPC) turn into a failed syscall.
+// If the error is already formatted, it is directly written.  Any other error
+// is reported as the NFS status describing it (SERVERFAULT if unrecognized)
+// inside an accepted reply, not as an RPC-level fault: an RPC fault means the
+// request itself was malformed, which some clients (macOS reports EBADRPC) turn
+// into a failed syscall.
 func basicErrorFormatter(err error) RPCError {
 	var rpcErr RPCError
 	if errors.As(err, &rpcErr) {
 		return rpcErr
 	}
-	return &NFSStatusError{NFSStatus: NFSStatusServerFault}
+	return statusError(err, NFSStatusServerFault)
 }
 
 // NFSStatusError represents an error at the NFS level.
@@ -275,7 +276,7 @@ func errFormatterWithBody(body []byte) func(err error) RPCError {
 		if errors.As(err, &rErr) {
 			return rErr
 		}
-		return &StatusErrorWithBody{NFSStatusError{NFSStatus: NFSStatusServerFault}, body[:]}
+		return &StatusErrorWithBody{*statusError(err, NFSStatusServerFault), body[:]}
 	}
 }
 
