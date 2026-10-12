@@ -49,9 +49,14 @@ func onMount(ctx context.Context, w *response, userHandle Handler) error {
 }
 
 func onUMount(ctx context.Context, w *response, userHandle Handler) error {
-	_, err := xdr.ReadOpaque(w.req.Body)
+	dirpath, err := xdr.ReadOpaque(w.req.Body)
 	if err != nil {
 		return err
+	}
+	if h, ok := userHandle.(UmountHandler); ok {
+		if err := h.Umount(ctx, w.conn, MountRequest{Header: w.req.Header, Dirpath: dirpath}); err != nil {
+			return err
+		}
 	}
 
 	return w.writeHeader(ResponseCodeSuccess)

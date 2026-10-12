@@ -104,6 +104,11 @@ func (f *trackingFile) Close() error {
 // serveAndMount starts an NFS server backed by handler and mounts it, registering cleanup for both.
 // Test helper shared across handler-level tests.
 func serveAndMount(t *testing.T, handler nfs.Handler) *nfsc.Target {
+	target, _ := serveAndMountClient(t, handler)
+	return target
+}
+
+func serveAndMountClient(t *testing.T, handler nfs.Handler) (*nfsc.Target, *nfsc.Mount) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
@@ -129,15 +134,41 @@ func serveAndMount(t *testing.T, handler nfs.Handler) *nfsc.Target {
 	}
 	t.Cleanup(func() { c.Close() })
 
-	var mounter nfsc.Mount
-	mounter.Client = c
+	mounter := &nfsc.Mount{Client: c}
 	target, err := mounter.Mount("/", rpc.AuthNull)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mounter.Unmount() })
 
-	return target
+	return target, mounter
+}
+
+type umountRecorder struct {
+	nfs.Handler
+	dirpath string
+}
+
+func (h *umountRecorder) Umount(_ context.Context, _ net.Conn, req nfs.MountRequest) error {
+	h.dirpath = string(req.Dirpath)
+	return nil
+}
+
+func TestUmount(t *testing.T) {
+	mem := memfs.New()
+	f, err := mem.Create("/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	recorder := &umountRecorder{Handler: helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit)}
+	_, mounter := serveAndMountClient(t, recorder)
+	if err := mounter.Unmount(); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.dirpath != "/" {
+		t.Errorf("Umount(%q), want \"/\"", recorder.dirpath)
+	}
 }
 
 func TestNFS(t *testing.T) {

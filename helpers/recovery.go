@@ -62,6 +62,20 @@ func (h *recoveryHandler) Mount(ctx context.Context, conn net.Conn, req nfs.Moun
 	return
 }
 
+// Umount only notifies, so unlike OpenDir every wrapper can forward it.
+func (h *recoveryHandler) Umount(ctx context.Context, conn net.Conn, req nfs.MountRequest) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.onPanic(r)
+			err = fmt.Errorf("%w: %v", ErrRecoveredPanic, r)
+		}
+	}()
+	if u, ok := h.handler.(nfs.UmountHandler); ok {
+		return u.Umount(ctx, conn, req)
+	}
+	return nil
+}
+
 func (h *recoveryHandler) Change(fs billy.Filesystem) billy.Change {
 	defer h.recover()
 	// If fs is our wrapped fs, unwrap it for the underlying handler

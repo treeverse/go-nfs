@@ -35,6 +35,36 @@ func TestRecoverPanics(t *testing.T) {
 	}
 }
 
+type umountHandler struct {
+	NullAuthHandler
+	umount func() error
+}
+
+func (h *umountHandler) Umount(context.Context, net.Conn, nfs.MountRequest) error {
+	return h.umount()
+}
+
+func TestRecoverPanicsUmount(t *testing.T) {
+	errUmount := errors.New("umount failed")
+	for _, tc := range []struct {
+		name    string
+		handler nfs.Handler
+		want    error
+	}{
+		{name: "no UmountHandler", handler: &NullAuthHandler{memfs.New()}},
+		{name: "forwards", handler: &umountHandler{umount: func() error { return nil }}},
+		{name: "returns its error", handler: &umountHandler{umount: func() error { return errUmount }}, want: errUmount},
+		{name: "panic becomes an error", handler: &umountHandler{umount: func() error { panic("umount panic") }}, want: ErrRecoveredPanic},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wrapped := RecoverPanics(tc.handler, func(any) {}).(nfs.UmountHandler)
+			if err := wrapped.Umount(context.Background(), nil, nfs.MountRequest{}); !errors.Is(err, tc.want) {
+				t.Errorf("Umount() = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
 type panicFS struct {
 	billy.Filesystem
 }
