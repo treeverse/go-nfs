@@ -53,8 +53,10 @@ func onUMount(ctx context.Context, w *response, userHandle Handler) error {
 	if err != nil {
 		return err
 	}
-	if h, ok := userHandle.(UnmountHandler); ok {
-		h.Unmount(ctx, w.conn, MountRequest{Header: w.req.Header, Dirpath: dirpath})
+	if h, ok := userHandle.(UmountHandler); ok {
+		if err := h.Umount(ctx, w.conn, MountRequest{Header: w.req.Header, Dirpath: dirpath}); err != nil {
+			return err
+		}
 	}
 
 	return w.writeHeader(ResponseCodeSuccess)

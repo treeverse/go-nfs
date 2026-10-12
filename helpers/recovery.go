@@ -62,12 +62,18 @@ func (h *recoveryHandler) Mount(ctx context.Context, conn net.Conn, req nfs.Moun
 	return
 }
 
-// Unmount only notifies, so unlike OpenDir every wrapper can forward it.
-func (h *recoveryHandler) Unmount(ctx context.Context, conn net.Conn, req nfs.MountRequest) {
-	defer h.recover()
-	if u, ok := h.handler.(nfs.UnmountHandler); ok {
-		u.Unmount(ctx, conn, req)
+// Umount only notifies, so unlike OpenDir every wrapper can forward it.
+func (h *recoveryHandler) Umount(ctx context.Context, conn net.Conn, req nfs.MountRequest) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.onPanic(r)
+			err = fmt.Errorf("%w: %v", ErrRecoveredPanic, r)
+		}
+	}()
+	if u, ok := h.handler.(nfs.UmountHandler); ok {
+		return u.Umount(ctx, conn, req)
 	}
+	return nil
 }
 
 func (h *recoveryHandler) Change(fs billy.Filesystem) billy.Change {

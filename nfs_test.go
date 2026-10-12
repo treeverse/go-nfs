@@ -16,7 +16,6 @@ import (
 	"sync"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/go-git/go-billy/v6"
 	nfs "github.com/treeverse/go-nfs"
@@ -145,37 +144,30 @@ func serveAndMountClient(t *testing.T, handler nfs.Handler) (*nfsc.Target, *nfsc
 	return target, mounter
 }
 
-type unmountRecorder struct {
+type umountRecorder struct {
 	nfs.Handler
-	unmounted chan string
+	dirpath string
 }
 
-func (h unmountRecorder) Unmount(_ context.Context, _ net.Conn, req nfs.MountRequest) {
-	h.unmounted <- string(req.Dirpath)
+func (h *umountRecorder) Umount(_ context.Context, _ net.Conn, req nfs.MountRequest) error {
+	h.dirpath = string(req.Dirpath)
+	return nil
 }
 
-func TestUnmountThroughRecoverPanics(t *testing.T) {
+func TestUmount(t *testing.T) {
 	mem := memfs.New()
 	f, err := mem.Create("/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.Close()
-	recorder := unmountRecorder{
-		Handler:   helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit),
-		unmounted: make(chan string, 1),
-	}
-	_, mounter := serveAndMountClient(t, helpers.RecoverPanics(recorder, func(r any) { t.Errorf("panic: %v", r) }))
+	recorder := &umountRecorder{Handler: helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit)}
+	_, mounter := serveAndMountClient(t, recorder)
 	if err := mounter.Unmount(); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case got := <-recorder.unmounted:
-		if got != "/" {
-			t.Errorf("Unmount(%q), want \"/\"", got)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Unmount not called")
+	if recorder.dirpath != "/" {
+		t.Errorf("Umount(%q), want \"/\"", recorder.dirpath)
 	}
 }
 

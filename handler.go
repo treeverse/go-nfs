@@ -87,7 +87,7 @@ type DirIteratorHandler interface {
 	OpenDir(ctx context.Context, path string, cookie, verifier uint64) (DirIterator, error)
 }
 
-// UnmountHandler is told of each MOUNTPROC_UMNT, which clients may skip.
-type UnmountHandler interface {
-	Unmount(ctx context.Context, conn net.Conn, req MountRequest)
+// UmountHandler is told of each MOUNTPROC_UMNT, which clients may skip.
+type UmountHandler interface {
+	Umount(ctx context.Context, conn net.Conn, req MountRequest) error
 }
