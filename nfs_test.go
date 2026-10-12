@@ -16,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-billy/v6"
 	nfs "github.com/treeverse/go-nfs"
@@ -104,13 +105,19 @@ func (f *trackingFile) Close() error {
 // serveAndMount starts an NFS server backed by handler and mounts it, registering cleanup for both.
 // Test helper shared across handler-level tests.
 func serveAndMount(t *testing.T, handler nfs.Handler) *nfsc.Target {
+	target, _ := serveServerAndMount(t, &nfs.Server{Handler: handler})
+	return target
+}
+
+// serveServerAndMount starts srv and mounts it, registering cleanup for both.
+func serveServerAndMount(t *testing.T, srv *nfs.Server) (*nfsc.Target, *nfsc.Mount) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	go func() {
-		_ = nfs.Serve(listener, handler)
+		_ = srv.Serve(listener)
 	}()
 
 	// rpc.DialTCP binds a random local source port and, for non-privileged
@@ -129,15 +136,40 @@ func serveAndMount(t *testing.T, handler nfs.Handler) *nfsc.Target {
 	}
 	t.Cleanup(func() { c.Close() })
 
-	var mounter nfsc.Mount
-	mounter.Client = c
+	mounter := &nfsc.Mount{Client: c}
 	target, err := mounter.Mount("/", rpc.AuthNull)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mounter.Unmount() })
 
-	return target
+	return target, mounter
+}
+
+func TestOnUnmount(t *testing.T) {
+	mem := memfs.New()
+	f, err := mem.Create("/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	unmounted := make(chan string, 1)
+	srv := &nfs.Server{
+		Handler:   helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit),
+		OnUnmount: func(dirpath string) { unmounted <- dirpath },
+	}
+	_, mounter := serveServerAndMount(t, srv)
+	if err := mounter.Unmount(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-unmounted:
+		if got != "/" {
+			t.Errorf("OnUnmount(%q), want \"/\"", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnUnmount not called")
+	}
 }
 
 func TestNFS(t *testing.T) {

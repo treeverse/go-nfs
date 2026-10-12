@@ -14,6 +14,9 @@ type Server struct {
 	Handler
 	ID [8]byte
 	context.Context
+	// OnUnmount, if set, is called with the directory a client unmounts with
+	// MOUNTPROC_UMNT.  The call is advisory: clients do not send it on every unmount.
+	OnUnmount func(dirpath string)
 }
 
 // RegisterMessageHandler registers a handler for a specific
