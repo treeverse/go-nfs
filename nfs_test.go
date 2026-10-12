@@ -109,13 +109,17 @@ func serveAndMount(t *testing.T, handler nfs.Handler) *nfsc.Target {
 }
 
 func serveAndMountClient(t *testing.T, handler nfs.Handler) (*nfsc.Target, *nfsc.Mount) {
+	return serveServerAndMount(t, &nfs.Server{Handler: handler})
+}
+
+func serveServerAndMount(t *testing.T, srv *nfs.Server) (*nfsc.Target, *nfsc.Mount) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	go func() {
-		_ = nfs.Serve(listener, handler)
+		_ = srv.Serve(listener)
 	}()
 
 	// rpc.DialTCP binds a random local source port and, for non-privileged
@@ -168,6 +172,33 @@ func TestUmount(t *testing.T) {
 	}
 	if recorder.dirpath != "/" {
 		t.Errorf("Umount(%q), want \"/\"", recorder.dirpath)
+	}
+}
+
+// cancelOnUmount cancels the server's context from Umount, as a server that exits on unmount does.
+type cancelOnUmount struct {
+	nfs.Handler
+	cancel context.CancelFunc
+}
+
+func (h *cancelOnUmount) Umount(context.Context, net.Conn, nfs.MountRequest) error {
+	h.cancel()
+	return nil
+}
+
+func TestUmountCancellingServerContext(t *testing.T) {
+	mem := memfs.New()
+	f, err := mem.Create("/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handler := &cancelOnUmount{Handler: helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit), cancel: cancel}
+	_, mounter := serveServerAndMount(t, &nfs.Server{Handler: handler, Context: ctx})
+	if err := mounter.Unmount(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -48,8 +48,11 @@ type conn struct {
 func (c *conn) serve(ctx context.Context) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Replies outlive ctx, so a request handled as ctx ends still gets its reply.
+	writeCtx, stopWrites := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopWrites()
 	c.writeSerializer = make(chan []byte, 1)
-	go c.serializeWrites(connCtx)
+	go c.serializeWrites(writeCtx)
 
 	bio := bufio.NewReader(c.Conn)
 	for {
@@ -64,7 +67,7 @@ func (c *conn) serve(ctx context.Context) {
 		}
 		Log.Tracef("request: %v", w.req)
 		err = c.handle(connCtx, w)
-		respErr := w.finish(connCtx)
+		respErr := w.finish(writeCtx)
 		if err != nil {
 			Log.Errorf("error handling req: %v", err)
 			// failure to handle at a level needing to close the connection.
@@ -287,6 +290,10 @@ func (w *response) drain(ctx context.Context) error {
 }
 
 func (w *response) finish(ctx context.Context) error {
+	// err writes nothing once the server context ends.
+	if w.writer.Len() == 0 {
+		return nil
+	}
 	select {
 	case w.conn.writeSerializer <- w.writer.Bytes():
 		return nil
