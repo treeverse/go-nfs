@@ -25,12 +25,10 @@ var ErrRecoveredPanic = errors.New("panic")
 // If h also implements nfs.DirIteratorHandler, the returned handler will too.
 func RecoverPanics(h nfs.Handler, onPanic OnPanic) nfs.Handler {
 	base := &recoveryHandler{handler: h, onPanic: onPanic}
-	_, dirIter := h.(nfs.DirIteratorHandler)
-	_, mkdir := h.(nfs.MkdirHandler)
-	switch {
-	case dirIter && mkdir:
-		return &recoveryHandlerWithDirIteratorAndMkdir{&recoveryHandlerWithDirIterator{recoveryHandler: base}}
-	case dirIter:
+	if _, ok := h.(nfs.MkdirHandler); ok {
+		return &recoveryHandlerWithMkdir{&recoveryHandlerWithDirIterator{recoveryHandler: base}}
+	}
+	if _, ok := h.(nfs.DirIteratorHandler); ok {
 		return &recoveryHandlerWithDirIterator{recoveryHandler: base}
 	}
 	return base
@@ -141,19 +139,13 @@ func (h *recoveryHandlerWithDirIterator) OpenDir(ctx context.Context, path strin
 	return it, err
 }
 
-// recoveryHandlerWithDirIteratorAndMkdir extends recoveryHandlerWithDirIterator for
-// handlers that also implement nfs.MkdirHandler.
-type recoveryHandlerWithDirIteratorAndMkdir struct {
+// recoveryHandlerWithMkdir forwards nfs.MkdirHandler; it assumes the handler also
+// implements nfs.DirIteratorHandler, as Everest's does.
+type recoveryHandlerWithMkdir struct {
 	*recoveryHandlerWithDirIterator
 }
 
-func (h *recoveryHandlerWithDirIteratorAndMkdir) Mkdir(ctx context.Context, dir []byte, name string, attrs *nfs.SetFileAttributes) (fh []byte, attr, dirAttr *nfs.FileAttribute, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			h.onPanic(r)
-			err = fmt.Errorf("%w: %v", ErrRecoveredPanic, r)
-		}
-	}()
+func (h *recoveryHandlerWithMkdir) Mkdir(ctx context.Context, dir []byte, name string, attrs *nfs.SetFileAttributes) ([]byte, *nfs.FileAttribute, *nfs.FileAttribute, error) {
 	return h.handler.(nfs.MkdirHandler).Mkdir(ctx, dir, name, attrs)
 }
 

@@ -26,13 +26,6 @@ func onMkdir(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusInval, err}
 	}
 
-	if len(string(obj.Filename)) > PathNameMax {
-		return &NFSStatusError{NFSStatusNameTooLong, os.ErrInvalid}
-	}
-	if string(obj.Filename) == "." || string(obj.Filename) == ".." {
-		return &NFSStatusError{NFSStatusExist, os.ErrExist}
-	}
-
 	if mh, ok := userHandle.(MkdirHandler); ok {
 		fp, attr, dirAttr, err := mh.Mkdir(ctx, obj.Handle, string(obj.Filename), attrs)
 		if err != nil {
@@ -47,6 +40,13 @@ func onMkdir(ctx context.Context, w *response, userHandle Handler) error {
 	}
 	if !billy.CapabilityCheck(fs, billy.WriteCapability) {
 		return &NFSStatusError{NFSStatusROFS, os.ErrPermission}
+	}
+
+	if len(string(obj.Filename)) > PathNameMax {
+		return &NFSStatusError{NFSStatusNameTooLong, os.ErrInvalid}
+	}
+	if string(obj.Filename) == "." || string(obj.Filename) == ".." {
+		return &NFSStatusError{NFSStatusExist, os.ErrExist}
 	}
 
 	newFolder := append(path, string(obj.Filename))
