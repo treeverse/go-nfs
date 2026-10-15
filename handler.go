@@ -76,6 +76,16 @@ type DirIterator interface {
 	Close()
 }
 
+// MkdirHandler is an optional interface for handlers that create directories by
+// handle.  When implemented, go-nfs calls Mkdir instead of the billy.Filesystem
+// calls that otherwise serve MKDIR.
+type MkdirHandler interface {
+	// Mkdir creates directory name inside the directory dir, with attrs applied.  It
+	// returns the new directory's handle and attributes, and dir's attributes after
+	// the change.
+	Mkdir(ctx context.Context, dir []byte, name string, attrs *SetFileAttributes) (fh []byte, attr, dirAttr *FileAttribute, err error)
+}
+
 // DirIteratorHandler is an optional interface for handlers that stream
 // directory listings entry by entry. When implemented, go-nfs calls OpenDir
 // instead of billy.Filesystem.ReadDir, eliminating the full-listing rebuild.

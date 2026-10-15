@@ -26,19 +26,27 @@ func onMkdir(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusInval, err}
 	}
 
+	if len(string(obj.Filename)) > PathNameMax {
+		return &NFSStatusError{NFSStatusNameTooLong, os.ErrInvalid}
+	}
+	if string(obj.Filename) == "." || string(obj.Filename) == ".." {
+		return &NFSStatusError{NFSStatusExist, os.ErrExist}
+	}
+
+	if mh, ok := userHandle.(MkdirHandler); ok {
+		fp, attr, dirAttr, err := mh.Mkdir(ctx, obj.Handle, string(obj.Filename), attrs)
+		if err != nil {
+			return statusError(err, NFSStatusAccess)
+		}
+		return writeMkdirReply(w, fp, attr, dirAttr)
+	}
+
 	fs, path, err := userHandle.FromHandle(obj.Handle)
 	if err != nil {
 		return &NFSStatusError{NFSStatusStale, err}
 	}
 	if !billy.CapabilityCheck(fs, billy.WriteCapability) {
 		return &NFSStatusError{NFSStatusROFS, os.ErrPermission}
-	}
-
-	if len(string(obj.Filename)) > PathNameMax {
-		return &NFSStatusError{NFSStatusNameTooLong, os.ErrInvalid}
-	}
-	if string(obj.Filename) == "." || string(obj.Filename) == ".." {
-		return &NFSStatusError{NFSStatusExist, os.ErrExist}
 	}
 
 	newFolder := append(path, string(obj.Filename))
@@ -67,6 +75,10 @@ func onMkdir(ctx context.Context, w *response, userHandle Handler) error {
 		}
 	}
 
+	return writeMkdirReply(w, fp, tryStat(fs, newFolder), tryStat(fs, path))
+}
+
+func writeMkdirReply(w *response, fp []byte, attr, dirAttr *FileAttribute) error {
 	writer := bytes.NewBuffer([]byte{})
 	if err := xdr.Write(writer, uint32(NFSStatusOk)); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
@@ -79,11 +91,11 @@ func onMkdir(ctx context.Context, w *response, userHandle Handler) error {
 	if err := xdr.Write(writer, fp); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
-	if err := WritePostOpAttrs(writer, tryStat(fs, newFolder)); err != nil {
+	if err := WritePostOpAttrs(writer, attr); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
 
-	if err := WriteWcc(writer, nil, tryStat(fs, path)); err != nil {
+	if err := WriteWcc(writer, nil, dirAttr); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
 
