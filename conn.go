@@ -46,25 +46,24 @@ const shutdownWriteTimeout = 5 * time.Second
 
 type conn struct {
 	*Server
-	replies chan []byte
+	writeSerializer chan []byte
+	writeDone       chan struct{}
 	net.Conn
 }
 
-// serve answers requests until the client disconnects or ctx ends.  Once ctx ends it reads
-// no more requests; a request already read still gets its reply, unless its handler fails.
 func (c *conn) serve(ctx context.Context) {
-	// Replies are written on their own goroutine so that writing one overlaps handling
-	// the next.
-	c.replies = make(chan []byte, 1)
-	written := make(chan struct{})
+	connCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	c.writeSerializer = make(chan []byte, 1)
+	c.writeDone = make(chan struct{})
 	go func() {
-		defer close(written)
-		c.writeReplies()
+		defer close(c.writeDone)
+		defer c.Close()
+		c.serializeWrites(context.WithoutCancel(connCtx))
 	}()
 	defer func() {
-		close(c.replies)
-		<-written
-		_ = c.Close()
+		close(c.writeSerializer)
+		<-c.writeDone
 	}()
 	stop := context.AfterFunc(ctx, func() {
 		_ = c.SetReadDeadline(time.Now())
@@ -74,37 +73,55 @@ func (c *conn) serve(ctx context.Context) {
 
 	bio := bufio.NewReader(c.Conn)
 	for {
-		w, err := c.readRequestHeader(ctx, bio)
+		w, err := c.readRequestHeader(connCtx, bio)
 		if err != nil {
 			return
 		}
 		Log.Tracef("request: %v", w.req)
-		err = c.handle(ctx, w)
-		w.finish()
+		err = c.handle(connCtx, w)
+		respErr := w.finish()
 		if err != nil {
 			Log.Errorf("error handling req: %v", err)
+			return
+		}
+		if respErr != nil {
+			Log.Errorf("error sending response: %v", respErr)
 			return
 		}
 	}
 }
 
-// writeReplies sends each reply on c.replies until it is closed.  A failed write closes the
-// connection, since the client can no longer find where the next reply starts.
-func (c *conn) writeReplies() {
-	out := bufio.NewWriter(c.Conn)
-	failed := false
-	for msg := range c.replies {
-		if failed {
-			continue
-		}
-		var header [4]byte
-		binary.BigEndian.PutUint32(header[:], uint32(len(msg))|1<<31)
-		_, _ = out.Write(header[:])
-		_, _ = out.Write(msg)
-		if err := out.Flush(); err != nil {
-			Log.Errorf("error sending response: %v", err)
-			failed = true
-			_ = c.Close()
+func (c *conn) serializeWrites(ctx context.Context) {
+	// todo: maybe don't need the extra buffer
+	writer := bufio.NewWriter(c.Conn)
+	var fragmentBuf [4]byte
+	var fragmentInt uint32
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-c.writeSerializer:
+			if !ok {
+				return
+			}
+			// prepend the fragmentation header
+			fragmentInt = uint32(len(msg))
+			fragmentInt |= (1 << 31)
+			binary.BigEndian.PutUint32(fragmentBuf[:], fragmentInt)
+			n, err := writer.Write(fragmentBuf[:])
+			if n < 4 || err != nil {
+				return
+			}
+			n, err = writer.Write(msg)
+			if err != nil {
+				return
+			}
+			if n < len(msg) {
+				panic("todo: ensure writes complete fully.")
+			}
+			if err = writer.Flush(); err != nil {
+				return
+			}
 		}
 	}
 }
@@ -281,13 +298,17 @@ func (w *response) drain(ctx context.Context) error {
 	return io.ErrUnexpectedEOF
 }
 
-func (w *response) finish() {
-	msg := w.writer.Bytes()
+func (w *response) finish() error {
 	// err writes nothing once the server context ends.
-	if len(msg) == 0 {
-		return
+	if w.writer.Len() == 0 {
+		return nil
 	}
-	w.conn.replies <- msg
+	select {
+	case w.conn.writeSerializer <- w.writer.Bytes():
+		return nil
+	case <-w.conn.writeDone:
+		return io.ErrClosedPipe
+	}
 }
 
 func (c *conn) readRequestHeader(ctx context.Context, reader *bufio.Reader) (w *response, err error) {
