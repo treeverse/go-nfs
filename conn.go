@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"runtime/debug"
+	"time"
 
 	xdr2 "github.com/rasky/go-xdr/xdr2"
 	"github.com/willscott/go-nfs-client/nfs/rpc"
@@ -39,9 +40,14 @@ const (
 	ResponseCodeAuthError
 )
 
+// shutdownWriteTimeout bounds sending the remaining replies once the server context ends,
+// so a client that stops reading cannot hold up Serve.
+const shutdownWriteTimeout = 5 * time.Second
+
 type conn struct {
 	*Server
 	writeSerializer chan []byte
+	writeDone       chan struct{}
 	net.Conn
 }
 
@@ -49,31 +55,37 @@ func (c *conn) serve(ctx context.Context) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	c.writeSerializer = make(chan []byte, 1)
-	go c.serializeWrites(connCtx)
+	c.writeDone = make(chan struct{})
+	go func() {
+		defer close(c.writeDone)
+		defer c.Close()
+		c.serializeWrites(context.WithoutCancel(connCtx))
+	}()
+	defer func() {
+		close(c.writeSerializer)
+		<-c.writeDone
+	}()
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.SetReadDeadline(time.Now())
+		_ = c.SetWriteDeadline(time.Now().Add(shutdownWriteTimeout))
+	})
+	defer stop()
 
 	bio := bufio.NewReader(c.Conn)
 	for {
 		w, err := c.readRequestHeader(connCtx, bio)
 		if err != nil {
-			if err == io.EOF {
-				// Clean close.
-				c.Close()
-				return
-			}
 			return
 		}
 		Log.Tracef("request: %v", w.req)
 		err = c.handle(connCtx, w)
-		respErr := w.finish(connCtx)
+		respErr := w.finish()
 		if err != nil {
 			Log.Errorf("error handling req: %v", err)
-			// failure to handle at a level needing to close the connection.
-			c.Close()
 			return
 		}
 		if respErr != nil {
 			Log.Errorf("error sending response: %v", respErr)
-			c.Close()
 			return
 		}
 	}
@@ -286,12 +298,16 @@ func (w *response) drain(ctx context.Context) error {
 	return io.ErrUnexpectedEOF
 }
 
-func (w *response) finish(ctx context.Context) error {
+func (w *response) finish() error {
+	// err writes nothing once the server context ends.
+	if w.writer.Len() == 0 {
+		return nil
+	}
 	select {
 	case w.conn.writeSerializer <- w.writer.Bytes():
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-w.conn.writeDone:
+		return io.ErrClosedPipe
 	}
 }
 
