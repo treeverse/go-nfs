@@ -40,39 +40,71 @@ const (
 	ResponseCodeAuthError
 )
 
+// shutdownWriteTimeout bounds sending the remaining replies once the server context ends,
+// so a client that stops reading cannot hold up Serve.
+const shutdownWriteTimeout = 5 * time.Second
+
 type conn struct {
 	*Server
-	out *bufio.Writer
+	replies chan []byte
 	net.Conn
 }
 
-// serve answers requests until the client disconnects or ctx ends.  A request in progress
-// when ctx ends still gets its reply.
+// serve answers requests until the client disconnects or ctx ends.  Once ctx ends it reads
+// no more requests; a request already read still gets its reply, unless its handler fails.
 func (c *conn) serve(ctx context.Context) {
-	connCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	defer c.Close()
-	// Ends a read waiting for the next request.
-	stop := context.AfterFunc(connCtx, func() { _ = c.SetReadDeadline(time.Now()) })
+	// Replies are written on their own goroutine so that writing one overlaps handling
+	// the next.
+	c.replies = make(chan []byte, 1)
+	written := make(chan struct{})
+	go func() {
+		defer close(written)
+		c.writeReplies()
+	}()
+	defer func() {
+		close(c.replies)
+		<-written
+		_ = c.Close()
+	}()
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.SetReadDeadline(time.Now())
+		_ = c.SetWriteDeadline(time.Now().Add(shutdownWriteTimeout))
+	})
 	defer stop()
-	c.out = bufio.NewWriter(c.Conn)
 
 	bio := bufio.NewReader(c.Conn)
 	for {
-		w, err := c.readRequestHeader(connCtx, bio)
+		w, err := c.readRequestHeader(ctx, bio)
 		if err != nil {
 			return
 		}
 		Log.Tracef("request: %v", w.req)
-		err = c.handle(connCtx, w)
-		respErr := w.finish()
+		err = c.handle(ctx, w)
+		w.finish()
 		if err != nil {
 			Log.Errorf("error handling req: %v", err)
 			return
 		}
-		if respErr != nil {
-			Log.Errorf("error sending response: %v", respErr)
-			return
+	}
+}
+
+// writeReplies sends each reply on c.replies until it is closed.  A failed write closes the
+// connection, since the client can no longer find where the next reply starts.
+func (c *conn) writeReplies() {
+	out := bufio.NewWriter(c.Conn)
+	failed := false
+	for msg := range c.replies {
+		if failed {
+			continue
+		}
+		var header [4]byte
+		binary.BigEndian.PutUint32(header[:], uint32(len(msg))|1<<31)
+		_, _ = out.Write(header[:])
+		_, _ = out.Write(msg)
+		if err := out.Flush(); err != nil {
+			Log.Errorf("error sending response: %v", err)
+			failed = true
+			_ = c.Close()
 		}
 	}
 }
@@ -249,21 +281,13 @@ func (w *response) drain(ctx context.Context) error {
 	return io.ErrUnexpectedEOF
 }
 
-func (w *response) finish() error {
+func (w *response) finish() {
 	msg := w.writer.Bytes()
 	// err writes nothing once the server context ends.
 	if len(msg) == 0 {
-		return nil
+		return
 	}
-	var header [4]byte
-	binary.BigEndian.PutUint32(header[:], uint32(len(msg))|1<<31)
-	if _, err := w.conn.out.Write(header[:]); err != nil {
-		return err
-	}
-	if _, err := w.conn.out.Write(msg); err != nil {
-		return err
-	}
-	return w.conn.out.Flush()
+	w.conn.replies <- msg
 }
 
 func (c *conn) readRequestHeader(ctx context.Context, reader *bufio.Reader) (w *response, err error) {
