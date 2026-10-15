@@ -2,6 +2,7 @@ package helpers
 
 import (
 	"context"
+	"errors"
 	"net"
 
 	"github.com/go-git/go-billy/v6"
@@ -34,9 +35,9 @@ func (h *NullAuthHandler) Change(fs billy.Filesystem) billy.Change {
 	return nil
 }
 
-// Mkdir creates a directory in the provided filesystem.
-func (h *NullAuthHandler) Mkdir(_ context.Context, dir []byte, name string, attrs *nfs.SetFileAttributes) ([]byte, *nfs.FileAttribute, *nfs.FileAttribute, error) {
-	return nfs.BillyMkdir(h, dir, name, attrs)
+// Mkdir is not supported.
+func (h *NullAuthHandler) Mkdir(context.Context, []byte, string, *nfs.SetFileAttributes) ([]byte, *nfs.FileAttribute, *nfs.FileAttribute, error) {
+	return nil, nil, nil, errors.ErrUnsupported
 }
 
 // FSStat provides information about a filesystem.

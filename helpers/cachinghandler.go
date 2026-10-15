@@ -1,7 +1,6 @@
 package helpers
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"io/fs"
@@ -78,11 +77,6 @@ func (c *CachingHandler) ToHandle(f billy.Filesystem, path []string) []byte {
 	b, _ := id.MarshalBinary()
 
 	return b
-}
-
-// Mkdir creates a directory, resolving handles through this cache.
-func (c *CachingHandler) Mkdir(_ context.Context, dir []byte, name string, attrs *nfs.SetFileAttributes) ([]byte, *nfs.FileAttribute, *nfs.FileAttribute, error) {
-	return nfs.BillyMkdir(c, dir, name, attrs)
 }
 
 // FromHandle converts from an opaque handle to the file it represents
