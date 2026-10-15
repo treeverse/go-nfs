@@ -25,9 +25,6 @@ var ErrRecoveredPanic = errors.New("panic")
 // If h also implements nfs.DirIteratorHandler, the returned handler will too.
 func RecoverPanics(h nfs.Handler, onPanic OnPanic) nfs.Handler {
 	base := &recoveryHandler{handler: h, onPanic: onPanic}
-	if _, ok := h.(nfs.MkdirHandler); ok {
-		return &recoveryHandlerWithMkdir{&recoveryHandlerWithDirIterator{recoveryHandler: base}}
-	}
 	if _, ok := h.(nfs.DirIteratorHandler); ok {
 		return &recoveryHandlerWithDirIterator{recoveryHandler: base}
 	}
@@ -77,6 +74,16 @@ func (h *recoveryHandler) Umount(ctx context.Context, conn net.Conn, req nfs.Mou
 		return u.Umount(ctx, conn, req)
 	}
 	return nil
+}
+
+func (h *recoveryHandler) Mkdir(ctx context.Context, dir []byte, name string, attrs *nfs.SetFileAttributes) (fh []byte, attr, dirAttr *nfs.FileAttribute, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.onPanic(r)
+			err = fmt.Errorf("%w: %v", ErrRecoveredPanic, r)
+		}
+	}()
+	return h.handler.Mkdir(ctx, dir, name, attrs)
 }
 
 func (h *recoveryHandler) Change(fs billy.Filesystem) billy.Change {
@@ -137,16 +144,6 @@ func (h *recoveryHandlerWithDirIterator) OpenDir(ctx context.Context, path strin
 		it = &recoveryDirIterator{DirIterator: it, onPanic: h.onPanic}
 	}
 	return it, err
-}
-
-// recoveryHandlerWithMkdir forwards nfs.MkdirHandler; it assumes the handler also
-// implements nfs.DirIteratorHandler, as Everest's does.
-type recoveryHandlerWithMkdir struct {
-	*recoveryHandlerWithDirIterator
-}
-
-func (h *recoveryHandlerWithMkdir) Mkdir(ctx context.Context, dir []byte, name string, attrs *nfs.SetFileAttributes) ([]byte, *nfs.FileAttribute, *nfs.FileAttribute, error) {
-	return h.handler.(nfs.MkdirHandler).Mkdir(ctx, dir, name, attrs)
 }
 
 // recoveryFilesystem wraps a billy.Filesystem with panic recovery.

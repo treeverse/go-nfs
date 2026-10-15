@@ -15,6 +15,10 @@ type Handler interface {
 
 	Mount(context.Context, net.Conn, MountRequest) (MountStatus, billy.Filesystem, []AuthFlavor)
 
+	// Mkdir creates directory name inside the directory dir, with attrs applied.  It returns
+	// the new directory's handle and attributes, and dir's attributes after the change.
+	Mkdir(ctx context.Context, dir []byte, name string, attrs *SetFileAttributes) (fh []byte, attr, dirAttr *FileAttribute, err error)
+
 	// Change can return 'nil' if filesystem is read-only
 	// If the returned value can be cast to `UnixChange`, mknod and link RPCs will be available.
 	Change(billy.Filesystem) billy.Change
@@ -74,11 +78,6 @@ type DirIterator interface {
 	// Verifier returns the directory's cookie verifier. Stable throughout the lifetime of the iterator.
 	Verifier() uint64
 	Close()
-}
-
-// MkdirHandler is an optional interface for handlers that create directories by handle.
-type MkdirHandler interface {
-	Mkdir(ctx context.Context, dir []byte, name string, attrs *SetFileAttributes) (fh []byte, attr, dirAttr *FileAttribute, err error)
 }
 
 // DirIteratorHandler is an optional interface for handlers that stream

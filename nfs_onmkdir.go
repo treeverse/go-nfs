@@ -3,6 +3,7 @@ package nfs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 
 	"github.com/go-git/go-billy/v6"
@@ -26,22 +27,6 @@ func onMkdir(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusInval, err}
 	}
 
-	if mh, ok := userHandle.(MkdirHandler); ok {
-		fp, attr, dirAttr, err := mh.Mkdir(ctx, obj.Handle, string(obj.Filename), attrs)
-		if err != nil {
-			return statusError(err, NFSStatusAccess)
-		}
-		return writeMkdirReply(w, fp, attr, dirAttr)
-	}
-
-	fs, path, err := userHandle.FromHandle(obj.Handle)
-	if err != nil {
-		return &NFSStatusError{NFSStatusStale, err}
-	}
-	if !billy.CapabilityCheck(fs, billy.WriteCapability) {
-		return &NFSStatusError{NFSStatusROFS, os.ErrPermission}
-	}
-
 	if len(string(obj.Filename)) > PathNameMax {
 		return &NFSStatusError{NFSStatusNameTooLong, os.ErrInvalid}
 	}
@@ -49,36 +34,15 @@ func onMkdir(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusExist, os.ErrExist}
 	}
 
-	newFolder := append(path, string(obj.Filename))
-	newFolderPath := fs.Join(newFolder...)
-	if s, err := fs.Stat(newFolderPath); err == nil {
-		if s.IsDir() {
-			return &NFSStatusError{NFSStatusExist, nil}
+	fp, attr, dirAttr, err := userHandle.Mkdir(ctx, obj.Handle, string(obj.Filename), attrs)
+	if err != nil {
+		var statusErr *NFSStatusError
+		if errors.As(err, &statusErr) {
+			return statusErr
 		}
-	} else {
-		if s, err := fs.Stat(fs.Join(path...)); err != nil {
-			return statusError(err, NFSStatusAccess)
-		} else if !s.IsDir() {
-			return &NFSStatusError{NFSStatusNotDir, nil}
-		}
-	}
-
-	if err := fs.MkdirAll(newFolderPath, attrs.Mode(mkdirDefaultMode)); err != nil {
 		return statusError(err, NFSStatusAccess)
 	}
 
-	fp := userHandle.ToHandle(fs, newFolder)
-	changer := userHandle.Change(fs)
-	if changer != nil {
-		if err := attrs.Apply(changer, fs, newFolderPath); err != nil {
-			return statusError(err, NFSStatusIO)
-		}
-	}
-
-	return writeMkdirReply(w, fp, tryStat(fs, newFolder), tryStat(fs, path))
-}
-
-func writeMkdirReply(w *response, fp []byte, attr, dirAttr *FileAttribute) error {
 	writer := bytes.NewBuffer([]byte{})
 	if err := xdr.Write(writer, uint32(NFSStatusOk)); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
@@ -103,4 +67,44 @@ func writeMkdirReply(w *response, fp []byte, attr, dirAttr *FileAttribute) error
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
 	return nil
+}
+
+// BillyMkdir implements Handler.Mkdir for a handler that serves a billy.Filesystem,
+// resolving handles through h.
+func BillyMkdir(h Handler, dir []byte, name string, attrs *SetFileAttributes) ([]byte, *FileAttribute, *FileAttribute, error) {
+	fs, path, err := h.FromHandle(dir)
+	if err != nil {
+		return nil, nil, nil, &NFSStatusError{NFSStatusStale, err}
+	}
+	if !billy.CapabilityCheck(fs, billy.WriteCapability) {
+		return nil, nil, nil, &NFSStatusError{NFSStatusROFS, os.ErrPermission}
+	}
+
+	newFolder := append(path, name)
+	newFolderPath := fs.Join(newFolder...)
+	if s, err := fs.Stat(newFolderPath); err == nil {
+		if s.IsDir() {
+			return nil, nil, nil, &NFSStatusError{NFSStatusExist, nil}
+		}
+	} else {
+		if s, err := fs.Stat(fs.Join(path...)); err != nil {
+			return nil, nil, nil, statusError(err, NFSStatusAccess)
+		} else if !s.IsDir() {
+			return nil, nil, nil, &NFSStatusError{NFSStatusNotDir, nil}
+		}
+	}
+
+	if err := fs.MkdirAll(newFolderPath, attrs.Mode(mkdirDefaultMode)); err != nil {
+		return nil, nil, nil, statusError(err, NFSStatusAccess)
+	}
+
+	fp := h.ToHandle(fs, newFolder)
+	changer := h.Change(fs)
+	if changer != nil {
+		if err := attrs.Apply(changer, fs, newFolderPath); err != nil {
+			return nil, nil, nil, statusError(err, NFSStatusIO)
+		}
+	}
+
+	return fp, tryStat(fs, newFolder), tryStat(fs, path), nil
 }

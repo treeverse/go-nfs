@@ -34,6 +34,11 @@ func (h *NullAuthHandler) Change(fs billy.Filesystem) billy.Change {
 	return nil
 }
 
+// Mkdir creates a directory in the provided filesystem.
+func (h *NullAuthHandler) Mkdir(_ context.Context, dir []byte, name string, attrs *nfs.SetFileAttributes) ([]byte, *nfs.FileAttribute, *nfs.FileAttribute, error) {
+	return nfs.BillyMkdir(h, dir, name, attrs)
+}
+
 // FSStat provides information about a filesystem.
 func (h *NullAuthHandler) FSStat(ctx context.Context, f billy.Filesystem, s *nfs.FSStat) error {
 	return nil
