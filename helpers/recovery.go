@@ -76,6 +76,16 @@ func (h *recoveryHandler) Umount(ctx context.Context, conn net.Conn, req nfs.Mou
 	return nil
 }
 
+func (h *recoveryHandler) Mkdir(ctx context.Context, dir []byte, name string, attrs *nfs.SetFileAttributes) (fh []byte, attr, dirAttr *nfs.FileAttribute, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.onPanic(r)
+			err = fmt.Errorf("%w: %v", ErrRecoveredPanic, r)
+		}
+	}()
+	return h.handler.Mkdir(ctx, dir, name, attrs)
+}
+
 func (h *recoveryHandler) Change(fs billy.Filesystem) billy.Change {
 	defer h.recover()
 	// If fs is our wrapped fs, unwrap it for the underlying handler

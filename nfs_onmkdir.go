@@ -5,12 +5,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/go-git/go-billy/v6"
 	"github.com/willscott/go-nfs-client/nfs/xdr"
-)
-
-const (
-	mkdirDefaultMode = 755
 )
 
 func onMkdir(ctx context.Context, w *response, userHandle Handler) error {
@@ -26,14 +21,6 @@ func onMkdir(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusInval, err}
 	}
 
-	fs, path, err := userHandle.FromHandle(obj.Handle)
-	if err != nil {
-		return &NFSStatusError{NFSStatusStale, err}
-	}
-	if !billy.CapabilityCheck(fs, billy.WriteCapability) {
-		return &NFSStatusError{NFSStatusROFS, os.ErrPermission}
-	}
-
 	if len(string(obj.Filename)) > PathNameMax {
 		return &NFSStatusError{NFSStatusNameTooLong, os.ErrInvalid}
 	}
@@ -41,30 +28,9 @@ func onMkdir(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusExist, os.ErrExist}
 	}
 
-	newFolder := append(path, string(obj.Filename))
-	newFolderPath := fs.Join(newFolder...)
-	if s, err := fs.Stat(newFolderPath); err == nil {
-		if s.IsDir() {
-			return &NFSStatusError{NFSStatusExist, nil}
-		}
-	} else {
-		if s, err := fs.Stat(fs.Join(path...)); err != nil {
-			return statusError(err, NFSStatusAccess)
-		} else if !s.IsDir() {
-			return &NFSStatusError{NFSStatusNotDir, nil}
-		}
-	}
-
-	if err := fs.MkdirAll(newFolderPath, attrs.Mode(mkdirDefaultMode)); err != nil {
+	fp, attr, dirAttr, err := userHandle.Mkdir(ctx, obj.Handle, string(obj.Filename), attrs)
+	if err != nil {
 		return statusError(err, NFSStatusAccess)
-	}
-
-	fp := userHandle.ToHandle(fs, newFolder)
-	changer := userHandle.Change(fs)
-	if changer != nil {
-		if err := attrs.Apply(changer, fs, newFolderPath); err != nil {
-			return statusError(err, NFSStatusIO)
-		}
 	}
 
 	writer := bytes.NewBuffer([]byte{})
@@ -79,11 +45,11 @@ func onMkdir(ctx context.Context, w *response, userHandle Handler) error {
 	if err := xdr.Write(writer, fp); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
-	if err := WritePostOpAttrs(writer, tryStat(fs, newFolder)); err != nil {
+	if err := WritePostOpAttrs(writer, attr); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
 
-	if err := WriteWcc(writer, nil, tryStat(fs, path)); err != nil {
+	if err := WriteWcc(writer, nil, dirAttr); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
 
