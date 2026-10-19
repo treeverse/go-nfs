@@ -59,7 +59,7 @@ func (c *conn) serve(ctx context.Context) {
 	go func() {
 		defer close(c.writeDone)
 		defer c.Close()
-		c.serializeWrites(context.WithoutCancel(connCtx))
+		c.serializeWrites()
 	}()
 	defer func() {
 		close(c.writeSerializer)
@@ -91,37 +91,29 @@ func (c *conn) serve(ctx context.Context) {
 	}
 }
 
-func (c *conn) serializeWrites(ctx context.Context) {
+func (c *conn) serializeWrites() {
 	// todo: maybe don't need the extra buffer
 	writer := bufio.NewWriter(c.Conn)
 	var fragmentBuf [4]byte
 	var fragmentInt uint32
-	for {
-		select {
-		case <-ctx.Done():
+	for msg := range c.writeSerializer {
+		// prepend the fragmentation header
+		fragmentInt = uint32(len(msg))
+		fragmentInt |= (1 << 31)
+		binary.BigEndian.PutUint32(fragmentBuf[:], fragmentInt)
+		n, err := writer.Write(fragmentBuf[:])
+		if n < 4 || err != nil {
 			return
-		case msg, ok := <-c.writeSerializer:
-			if !ok {
-				return
-			}
-			// prepend the fragmentation header
-			fragmentInt = uint32(len(msg))
-			fragmentInt |= (1 << 31)
-			binary.BigEndian.PutUint32(fragmentBuf[:], fragmentInt)
-			n, err := writer.Write(fragmentBuf[:])
-			if n < 4 || err != nil {
-				return
-			}
-			n, err = writer.Write(msg)
-			if err != nil {
-				return
-			}
-			if n < len(msg) {
-				panic("todo: ensure writes complete fully.")
-			}
-			if err = writer.Flush(); err != nil {
-				return
-			}
+		}
+		n, err = writer.Write(msg)
+		if err != nil {
+			return
+		}
+		if n < len(msg) {
+			panic("todo: ensure writes complete fully.")
+		}
+		if err = writer.Flush(); err != nil {
+			return
 		}
 	}
 }
