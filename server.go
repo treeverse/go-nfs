@@ -59,22 +59,10 @@ func (s *Server) Serve(l net.Listener) error {
 		}
 	}
 
-	// live holds the accept loop and every connection it starts, so Serve returns only
-	// once nothing is accepting and nothing is in flight.
+	// live holds every connection; Serve returns only once none is in flight.
 	// ponytail: a failed listener waits for its clients to hang up; cancel the Context to cut them off.
 	var live sync.WaitGroup
-	var acceptErr error
-	live.Add(1)
-	go func() {
-		defer live.Done()
-		acceptErr = s.accept(baseCtx, l, &live)
-	}()
-	live.Wait()
-	return acceptErr
-}
-
-// accept starts a connection for each client on l, adding it to live, until l is closed.
-func (s *Server) accept(ctx context.Context, l net.Listener, live *sync.WaitGroup) error {
+	defer live.Wait()
 	var tempDelay time.Duration
 	for {
 		conn, err := l.Accept()
@@ -101,7 +89,7 @@ func (s *Server) accept(ctx context.Context, l net.Listener, live *sync.WaitGrou
 		live.Add(1)
 		go func() {
 			defer live.Done()
-			c.serve(ctx)
+			c.serve(baseCtx)
 		}()
 	}
 }
