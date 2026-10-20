@@ -40,10 +40,6 @@ const (
 	ResponseCodeAuthError
 )
 
-// shutdownWriteTimeout bounds sending the remaining replies once the server context ends,
-// so a client that stops reading cannot hold up Serve.
-const shutdownWriteTimeout = 5 * time.Second
-
 type conn struct {
 	*Server
 	writeSerializer chan []byte
@@ -63,10 +59,8 @@ func (c *conn) serve(ctx context.Context) {
 		close(c.writeSerializer)
 		<-c.writeDone
 	}()
-	stop := context.AfterFunc(ctx, func() {
-		_ = c.SetReadDeadline(time.Now())
-		_ = c.SetWriteDeadline(time.Now().Add(shutdownWriteTimeout))
-	})
+	// Replies still drain with no deadline: a client that stops reading holds up Serve.
+	stop := context.AfterFunc(ctx, func() { _ = c.SetReadDeadline(time.Now()) })
 	defer stop()
 
 	bio := bufio.NewReader(c.Conn)
