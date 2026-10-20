@@ -45,8 +45,8 @@ type registeredHandlerID struct {
 var registeredHandlers map[registeredHandlerID]HandleFunc
 
 // Serve listens on the provided listener port for incoming client requests.  Once the
-// server's Context is done it stops accepting, lets each connection answer the request it
-// is handling, and returns nil when all of them have closed.
+// server's Context is done each connection answers the request it is handling and closes.
+// Serve returns nil once the caller has closed l and every connection has closed.
 func (s *Server) Serve(l net.Listener) error {
 	defer l.Close()
 	baseCtx := context.Background()
@@ -58,9 +58,6 @@ func (s *Server) Serve(l net.Listener) error {
 			return err
 		}
 	}
-
-	stop := context.AfterFunc(baseCtx, func() { _ = l.Close() })
-	defer stop()
 
 	// live holds the accept loop and every connection it starts, so Serve returns only
 	// once nothing is accepting and nothing is in flight.
@@ -76,13 +73,13 @@ func (s *Server) Serve(l net.Listener) error {
 	return acceptErr
 }
 
-// accept starts a connection for each client on l, adding it to live, until ctx is done.
+// accept starts a connection for each client on l, adding it to live, until l is closed.
 func (s *Server) accept(ctx context.Context, l net.Listener, live *sync.WaitGroup) error {
 	var tempDelay time.Duration
 	for {
 		conn, err := l.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
+			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {

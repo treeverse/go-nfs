@@ -121,6 +121,10 @@ func serveServerAndMount(t *testing.T, srv *nfs.Server) (*nfsc.Target, *nfsc.Mou
 	if err != nil {
 		t.Fatal(err)
 	}
+	if srv.Context != nil {
+		// The caller closes the listener on shutdown, as Everest does.
+		context.AfterFunc(srv.Context, func() { _ = listener.Close() })
+	}
 	served := make(chan error, 1)
 	stopped := make(chan struct{})
 	go func() {
