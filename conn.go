@@ -52,8 +52,6 @@ type conn struct {
 }
 
 func (c *conn) serve(ctx context.Context) {
-	connCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	c.writeSerializer = make(chan []byte, 1)
 	c.writeDone = make(chan struct{})
 	go func() {
@@ -73,12 +71,12 @@ func (c *conn) serve(ctx context.Context) {
 
 	bio := bufio.NewReader(c.Conn)
 	for {
-		w, err := c.readRequestHeader(connCtx, bio)
+		w, err := c.readRequestHeader(ctx, bio)
 		if err != nil {
 			return
 		}
 		Log.Tracef("request: %v", w.req)
-		err = c.handle(connCtx, w)
+		err = c.handle(ctx, w)
 		respErr := w.finish()
 		if err != nil {
 			Log.Errorf("error handling req: %v", err)
