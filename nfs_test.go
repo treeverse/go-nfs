@@ -105,13 +105,8 @@ func (f *trackingFile) Close() error {
 // serveAndMount starts an NFS server backed by handler and mounts it, registering cleanup for both.
 // Test helper shared across handler-level tests.
 func serveAndMount(t *testing.T, handler nfs.Handler) *nfsc.Target {
-	target, _ := serveAndMountClient(t, handler)
+	target, _, _ := serveServerAndMount(t, &nfs.Server{Handler: handler})
 	return target
-}
-
-func serveAndMountClient(t *testing.T, handler nfs.Handler) (*nfsc.Target, *nfsc.Mount) {
-	target, mounter, _ := serveServerAndMount(t, &nfs.Server{Handler: handler})
-	return target, mounter
 }
 
 // serveServerAndMount also returns what srv.Serve returns.
@@ -126,10 +121,8 @@ func serveServerAndMount(t *testing.T, srv *nfs.Server) (*nfsc.Target, *nfsc.Mou
 		context.AfterFunc(srv.Context, func() { _ = listener.Close() })
 	}
 	served := make(chan error, 1)
-	stopped := make(chan struct{})
 	go func() {
 		served <- srv.Serve(listener)
-		close(stopped)
 	}()
 
 	// rpc.DialTCP binds a random local source port and, for non-privileged
@@ -155,9 +148,7 @@ func serveServerAndMount(t *testing.T, srv *nfs.Server) (*nfsc.Target, *nfsc.Mou
 	}
 	t.Cleanup(func() {
 		// The client retries for 10s against a stopped server.
-		select {
-		case <-stopped:
-		default:
+		if srv.Context == nil || srv.Context.Err() == nil {
 			_ = mounter.Unmount()
 		}
 	})
@@ -183,7 +174,7 @@ func TestUmount(t *testing.T) {
 	}
 	f.Close()
 	recorder := &umountRecorder{Handler: helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit)}
-	_, mounter := serveAndMountClient(t, recorder)
+	_, mounter, _ := serveServerAndMount(t, &nfs.Server{Handler: recorder})
 	if err := mounter.Unmount(); err != nil {
 		t.Fatal(err)
 	}

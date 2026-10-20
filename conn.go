@@ -52,8 +52,11 @@ func (c *conn) serve(ctx context.Context) {
 	c.writeDone = make(chan struct{})
 	go func() {
 		defer close(c.writeDone)
-		defer c.Close()
 		c.serializeWrites()
+		_ = c.Close()
+		// After a failed write, drop the rest; the closed conn ends serve's next read.
+		for range c.writeSerializer {
+		}
 	}()
 	defer func() {
 		close(c.writeSerializer)
@@ -71,13 +74,9 @@ func (c *conn) serve(ctx context.Context) {
 		}
 		Log.Tracef("request: %v", w.req)
 		err = c.handle(ctx, w)
-		respErr := w.finish()
+		w.finish()
 		if err != nil {
 			Log.Errorf("error handling req: %v", err)
-			return
-		}
-		if respErr != nil {
-			Log.Errorf("error sending response: %v", respErr)
 			return
 		}
 	}
@@ -282,16 +281,10 @@ func (w *response) drain(ctx context.Context) error {
 	return io.ErrUnexpectedEOF
 }
 
-func (w *response) finish() error {
+func (w *response) finish() {
 	// err writes nothing once the server context ends.
-	if w.writer.Len() == 0 {
-		return nil
-	}
-	select {
-	case w.conn.writeSerializer <- w.writer.Bytes():
-		return nil
-	case <-w.conn.writeDone:
-		return io.ErrClosedPipe
+	if w.writer.Len() > 0 {
+		w.conn.writeSerializer <- w.writer.Bytes()
 	}
 }
 
