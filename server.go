@@ -60,7 +60,6 @@ func (s *Server) Serve(l net.Listener) error {
 	}
 
 	// live holds every connection; Serve returns only once none is in flight.
-	// ponytail: a failed listener waits for its clients to hang up; cancel the Context to cut them off.
 	var live sync.WaitGroup
 	defer live.Wait()
 	var tempDelay time.Duration
