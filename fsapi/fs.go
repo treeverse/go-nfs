@@ -186,4 +186,3 @@ type SpecialFiler interface {
 	// Socket creates a unix-domain socket.
 	Socket(ctx context.Context, dir Handle, name string, change AttrChange) (h Handle, attrs *Attrs, w Wcc, err error)
 }
-
