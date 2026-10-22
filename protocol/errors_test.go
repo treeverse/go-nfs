@@ -1,4 +1,4 @@
-package nfs
+package protocol
 
 import (
 	"encoding/binary"
