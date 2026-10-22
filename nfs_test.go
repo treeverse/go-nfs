@@ -16,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-billy/v6"
 	nfs "github.com/treeverse/go-nfs"
@@ -104,18 +105,24 @@ func (f *trackingFile) Close() error {
 // serveAndMount starts an NFS server backed by handler and mounts it, registering cleanup for both.
 // Test helper shared across handler-level tests.
 func serveAndMount(t *testing.T, handler nfs.Handler) *nfsc.Target {
-	target, _ := serveAndMountClient(t, handler)
+	target, _, _ := serveServerAndMount(t, &nfs.Server{Handler: handler})
 	return target
 }
 
-func serveAndMountClient(t *testing.T, handler nfs.Handler) (*nfsc.Target, *nfsc.Mount) {
+// serveServerAndMount also returns what srv.Serve returns.
+func serveServerAndMount(t *testing.T, srv *nfs.Server) (*nfsc.Target, *nfsc.Mount, <-chan error) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if srv.Context != nil {
+		// The caller closes the listener on shutdown, as Everest does.
+		context.AfterFunc(srv.Context, func() { _ = listener.Close() })
+	}
+	served := make(chan error, 1)
 	go func() {
-		_ = nfs.Serve(listener, handler)
+		served <- srv.Serve(listener)
 	}()
 
 	// rpc.DialTCP binds a random local source port and, for non-privileged
@@ -139,9 +146,14 @@ func serveAndMountClient(t *testing.T, handler nfs.Handler) (*nfsc.Target, *nfsc
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = mounter.Unmount() })
+	t.Cleanup(func() {
+		// The client retries for 10s against a stopped server.
+		if srv.Context == nil || srv.Context.Err() == nil {
+			_ = mounter.Unmount()
+		}
+	})
 
-	return target, mounter
+	return target, mounter, served
 }
 
 type umountRecorder struct {
@@ -162,12 +174,47 @@ func TestUmount(t *testing.T) {
 	}
 	f.Close()
 	recorder := &umountRecorder{Handler: helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit)}
-	_, mounter := serveAndMountClient(t, recorder)
+	_, mounter, _ := serveServerAndMount(t, &nfs.Server{Handler: recorder})
 	if err := mounter.Unmount(); err != nil {
 		t.Fatal(err)
 	}
 	if recorder.dirpath != "/" {
 		t.Errorf("Umount(%q), want \"/\"", recorder.dirpath)
+	}
+}
+
+// cancelOnUmount cancels the server's context from Umount, as a server that exits on unmount does.
+type cancelOnUmount struct {
+	nfs.Handler
+	cancel context.CancelFunc
+}
+
+func (h *cancelOnUmount) Umount(context.Context, net.Conn, nfs.MountRequest) error {
+	h.cancel()
+	return nil
+}
+
+func TestUmountCancellingServerContext(t *testing.T) {
+	mem := memfs.New()
+	f, err := mem.Create("/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handler := &cancelOnUmount{Handler: helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit), cancel: cancel}
+	_, mounter, served := serveServerAndMount(t, &nfs.Server{Handler: handler, Context: ctx})
+	if err := mounter.Unmount(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after its context ended")
 	}
 }
 
