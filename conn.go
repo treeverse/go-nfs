@@ -54,9 +54,6 @@ func (c *conn) serve(ctx context.Context) {
 		defer close(c.writeDone)
 		c.serializeWrites()
 		_ = c.Close()
-		// After a failed write, drop the rest; the closed conn ends serve's next read.
-		for range c.writeSerializer {
-		}
 	}()
 	defer func() {
 		close(c.writeSerializer)
@@ -86,26 +83,12 @@ func (c *conn) serializeWrites() {
 	// todo: maybe don't need the extra buffer
 	writer := bufio.NewWriter(c.Conn)
 	var fragmentBuf [4]byte
-	var fragmentInt uint32
+	// A failed write sticks to writer and drops the replies after it; serve's next read fails.
 	for msg := range c.writeSerializer {
-		// prepend the fragmentation header
-		fragmentInt = uint32(len(msg))
-		fragmentInt |= (1 << 31)
-		binary.BigEndian.PutUint32(fragmentBuf[:], fragmentInt)
-		n, err := writer.Write(fragmentBuf[:])
-		if n < 4 || err != nil {
-			return
-		}
-		n, err = writer.Write(msg)
-		if err != nil {
-			return
-		}
-		if n < len(msg) {
-			panic("todo: ensure writes complete fully.")
-		}
-		if err = writer.Flush(); err != nil {
-			return
-		}
+		binary.BigEndian.PutUint32(fragmentBuf[:], uint32(len(msg))|(1<<31))
+		_, _ = writer.Write(fragmentBuf[:])
+		_, _ = writer.Write(msg)
+		_ = writer.Flush()
 	}
 }
 
