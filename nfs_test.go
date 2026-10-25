@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -215,6 +216,72 @@ func TestUmountCancellingServerContext(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Serve did not return after its context ended")
+	}
+}
+
+// failingWriteConn fails every Write and counts the calls.
+type failingWriteConn struct {
+	net.Conn
+	writes atomic.Int32
+}
+
+func (c *failingWriteConn) Write([]byte) (int, error) {
+	c.writes.Add(1)
+	return 0, errors.New("write failed")
+}
+
+// oneConnListener accepts conn once, then blocks until Close.
+type oneConnListener struct {
+	conns  chan net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (l *oneConnListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.conns:
+		return c, nil
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *oneConnListener) Close() error {
+	l.once.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *oneConnListener) Addr() net.Addr { return &net.TCPAddr{} }
+
+func TestServeReturnsAfterReplyWriteFails(t *testing.T) {
+	client, server := net.Pipe()
+	conn := &failingWriteConn{Conn: server}
+	listener := &oneConnListener{conns: make(chan net.Conn, 1), closed: make(chan struct{})}
+	listener.conns <- conn
+	served := make(chan error, 1)
+	go func() { served <- (&nfs.Server{}).Serve(listener) }()
+
+	// Three RPC CALLs for an unknown program; each gets a PROC_UNAVAIL reply.
+	// Write errors are fine: the server may close the conn once a reply fails.
+	for xid := uint32(1); xid <= 3; xid++ {
+		var frame [11]uint32
+		frame[0] = 1<<31 | 40
+		frame[1], frame[3], frame[4], frame[5] = xid, 2, 99999, 1
+		_ = binary.Write(client, binary.BigEndian, frame)
+	}
+	_ = client.Close()
+	_ = listener.Close()
+
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after a reply write failed")
+	}
+	if n := conn.writes.Load(); n != 1 {
+		t.Errorf("Write called %d times, want 1", n)
 	}
 }
 

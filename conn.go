@@ -42,25 +42,32 @@ const (
 
 type conn struct {
 	*Server
-	writeSerializer chan []byte
-	writeDone       chan struct{}
+	// finish sends each reply; serve writes them in order; readRequests closes it when reading stops.
+	replies chan []byte
 	net.Conn
 }
 
 func (c *conn) serve(ctx context.Context) {
-	c.writeSerializer = make(chan []byte, 1)
-	c.writeDone = make(chan struct{})
-	go func() {
-		defer close(c.writeDone)
-		c.serializeWrites()
-		_ = c.Close()
-	}()
-	defer func() {
-		close(c.writeSerializer)
-		<-c.writeDone
-	}()
-	// Replies still drain with no deadline: a client that stops reading holds up Serve.
+	c.replies = make(chan []byte, 1)
+	// serve owns the conn's writes and closes the conn after the last reply.
+	go c.readRequests(ctx)
+	writer := bufio.NewWriter(c.Conn)
+	var fragmentBuf [4]byte
+	// Write errors stick to writer and drop later replies, so readRequests never blocks on finish; no deadline: a client that stops reading holds up Serve.
+	for msg := range c.replies {
+		binary.BigEndian.PutUint32(fragmentBuf[:], uint32(len(msg))|(1<<31))
+		_, _ = writer.Write(fragmentBuf[:])
+		_, _ = writer.Write(msg)
+		_ = writer.Flush()
+	}
+	_ = c.Close()
+}
+
+func (c *conn) readRequests(ctx context.Context) {
+	defer close(c.replies)
+	// Ending ctx fails the pending read, so the reader stops after the request in hand.
 	stop := context.AfterFunc(ctx, func() { _ = c.SetReadDeadline(time.Now()) })
+	// Unregisters from ctx, which outlives the conn.
 	defer stop()
 
 	bio := bufio.NewReader(c.Conn)
@@ -76,19 +83,6 @@ func (c *conn) serve(ctx context.Context) {
 			Log.Errorf("error handling req: %v", err)
 			return
 		}
-	}
-}
-
-func (c *conn) serializeWrites() {
-	// todo: maybe don't need the extra buffer
-	writer := bufio.NewWriter(c.Conn)
-	var fragmentBuf [4]byte
-	// A failed write sticks to writer and drops the replies after it; serve's next read fails.
-	for msg := range c.writeSerializer {
-		binary.BigEndian.PutUint32(fragmentBuf[:], uint32(len(msg))|(1<<31))
-		_, _ = writer.Write(fragmentBuf[:])
-		_, _ = writer.Write(msg)
-		_ = writer.Flush()
 	}
 }
 
@@ -267,7 +261,7 @@ func (w *response) drain(ctx context.Context) error {
 func (w *response) finish() {
 	// err writes nothing once the server context ends.
 	if w.writer.Len() > 0 {
-		w.conn.writeSerializer <- w.writer.Bytes()
+		w.conn.replies <- w.writer.Bytes()
 	}
 }
 
