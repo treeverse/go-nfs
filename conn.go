@@ -81,11 +81,12 @@ func (c *conn) readRequests(ctx context.Context) {
 	for {
 		w, err := c.readRequestHeader(ctx, bio)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				Log.Debugf("reached EOF while reading request: %v", err)
+			// EOF: the client hung up. ctx done: the read deadline above ended the read.
+			if errors.Is(err, io.EOF) || ctx.Err() != nil {
+				Log.Debugf("stopped reading requests: %v", err)
 				return
 			}
-			Log.Warn("error reading request header: %v", err)
+			Log.Warnf("error reading request header: %v", err)
 			return
 		}
 		Log.Tracef("request: %v", w.req)
