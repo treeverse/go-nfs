@@ -53,12 +53,16 @@ func (c *conn) serve(ctx context.Context) {
 	go c.readRequests(ctx)
 	writer := bufio.NewWriter(c.Conn)
 	var fragmentBuf [4]byte
-	// Write errors stick to writer and drop later replies, so readRequests never blocks on finish; no deadline: a client that stops reading holds up Serve.
+	// A failed write closes the conn, ending the reader's next read; the loop keeps draining so finish never blocks. No deadline: a client that stops reading holds up Serve.
 	for msg := range c.replies {
 		binary.BigEndian.PutUint32(fragmentBuf[:], uint32(len(msg))|(1<<31))
 		_, _ = writer.Write(fragmentBuf[:])
 		_, _ = writer.Write(msg)
-		_ = writer.Flush()
+		// Flush returns the first error of the writes above too: bufio.Writer keeps it.
+		if err := writer.Flush(); err != nil {
+			Log.Errorf("error sending reply: %v", err)
+			_ = c.Close()
+		}
 	}
 	_ = c.Close()
 }
