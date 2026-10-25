@@ -54,7 +54,7 @@ func (c *conn) serve(ctx context.Context) {
 	go c.readRequests(ctx)
 	writer := bufio.NewWriter(c.Conn)
 	var fragmentBuf [4]byte
-	// A failed write closes the conn, ending the reader's next read; the loop keeps draining so finish never blocks. No deadline: a client that stops reading holds up Serve.
+	// After a failed write keep taking replies, or the reader blocks handing over the next one. No write deadline: a client that stops reading holds up Serve.
 	for msg := range c.replies {
 		binary.BigEndian.PutUint32(fragmentBuf[:], uint32(len(msg))|(1<<31))
 		_, _ = writer.Write(fragmentBuf[:])
@@ -272,7 +272,6 @@ func (w *response) drain(ctx context.Context) error {
 }
 
 func (w *response) finish() {
-	// err writes nothing once the server context ends.
 	if w.writer.Len() > 0 {
 		w.conn.replies <- w.writer.Bytes()
 	}

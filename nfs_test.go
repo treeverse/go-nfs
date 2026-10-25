@@ -148,7 +148,7 @@ func serveServerAndMount(t *testing.T, srv *nfs.Server) (*nfsc.Target, *nfsc.Mou
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		// The client retries for 10s against a stopped server.
+		// Skip Unmount once the server has stopped: the client would retry it for 10s.
 		if srv.Context == nil || srv.Context.Err() == nil {
 			_ = mounter.Unmount()
 		}
@@ -230,24 +230,23 @@ func (c *failingWriteConn) Write([]byte) (int, error) {
 	return 0, errors.New("write failed")
 }
 
-// oneConnListener accepts conn once, then blocks until Close.
+// oneConnListener hands out the conns sent on conns, then net.ErrClosed once closed.
 type oneConnListener struct {
-	conns  chan net.Conn
-	closed chan struct{}
-	once   sync.Once
+	conns chan net.Conn
+	// Serve closes its listener too (server.go defer l.Close()), so Close runs twice.
+	once sync.Once
 }
 
 func (l *oneConnListener) Accept() (net.Conn, error) {
-	select {
-	case c := <-l.conns:
-		return c, nil
-	case <-l.closed:
+	c, ok := <-l.conns
+	if !ok {
 		return nil, net.ErrClosed
 	}
+	return c, nil
 }
 
 func (l *oneConnListener) Close() error {
-	l.once.Do(func() { close(l.closed) })
+	l.once.Do(func() { close(l.conns) })
 	return nil
 }
 
@@ -256,7 +255,7 @@ func (l *oneConnListener) Addr() net.Addr { return &net.TCPAddr{} }
 func TestServeReturnsAfterReplyWriteFails(t *testing.T) {
 	client, server := net.Pipe()
 	conn := &failingWriteConn{Conn: server}
-	listener := &oneConnListener{conns: make(chan net.Conn, 1), closed: make(chan struct{})}
+	listener := &oneConnListener{conns: make(chan net.Conn, 1)}
 	listener.conns <- conn
 	served := make(chan error, 1)
 	go func() { served <- (&nfs.Server{}).Serve(listener) }()

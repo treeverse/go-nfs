@@ -59,14 +59,14 @@ func (s *Server) Serve(l net.Listener) error {
 		}
 	}
 
-	// live holds every connection; Serve returns only once none is in flight.
+	// live holds every connection; a clean stop returns only once none is in flight.
 	var live sync.WaitGroup
-	defer live.Wait()
 	var tempDelay time.Duration
 	for {
 		conn, err := l.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
+				live.Wait()
 				return nil
 			}
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
