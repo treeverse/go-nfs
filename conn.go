@@ -48,6 +48,7 @@ type conn struct {
 }
 
 func (c *conn) serve(ctx context.Context) {
+	defer c.Close()
 	c.replies = make(chan []byte, 1)
 	// serve owns the conn's writes and closes the conn after the last reply.
 	go c.readRequests(ctx)
@@ -64,20 +65,27 @@ func (c *conn) serve(ctx context.Context) {
 			_ = c.Close()
 		}
 	}
-	_ = c.Close()
 }
 
 func (c *conn) readRequests(ctx context.Context) {
 	defer close(c.replies)
-	// Ending ctx fails the pending read, so the reader stops after the request in hand.
-	stop := context.AfterFunc(ctx, func() { _ = c.SetReadDeadline(time.Now()) })
+	// Serve waits for every conn, but an idle conn waits in Read for a request that may never
+	// come (a client stays connected after unmount), and Read takes no ctx. So when ctx ends,
+	// a read deadline of now fails the pending read; Close would also drop queued replies.
+	// The reader stops after the request in hand; serve still sends its reply.
+	cancelAfterFunc := context.AfterFunc(ctx, func() { _ = c.SetReadDeadline(time.Now()) })
 	// Unregisters from ctx, which outlives the conn.
-	defer stop()
+	defer cancelAfterFunc()
 
 	bio := bufio.NewReader(c.Conn)
 	for {
 		w, err := c.readRequestHeader(ctx, bio)
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				Log.Debugf("reached EOF while reading request: %v", err)
+				return
+			}
+			Log.Warn("error reading request header: %v", err)
 			return
 		}
 		Log.Tracef("request: %v", w.req)
