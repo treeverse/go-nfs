@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -43,7 +44,9 @@ type registeredHandlerID struct {
 
 var registeredHandlers map[registeredHandlerID]HandleFunc
 
-// Serve listens on the provided listener port for incoming client requests.
+// Serve listens on the provided listener port for incoming client requests.  Once the
+// server's Context is done each connection answers the request it is handling and closes.
+// Serve returns nil once the caller has closed l and every connection has closed.
 func (s *Server) Serve(l net.Listener) error {
 	defer l.Close()
 	baseCtx := context.Background()
@@ -56,11 +59,16 @@ func (s *Server) Serve(l net.Listener) error {
 		}
 	}
 
+	// live holds every connection; a clean stop returns only once none is in flight.
+	var live sync.WaitGroup
 	var tempDelay time.Duration
-
 	for {
 		conn, err := l.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				live.Wait()
+				return nil
+			}
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				if tempDelay == 0 {
 					tempDelay = 5 * time.Millisecond
@@ -77,7 +85,11 @@ func (s *Server) Serve(l net.Listener) error {
 		}
 		tempDelay = 0
 		c := s.newConn(conn)
-		go c.serve(baseCtx)
+		live.Add(1)
+		go func() {
+			defer live.Done()
+			c.serve(baseCtx)
+		}()
 	}
 }
 

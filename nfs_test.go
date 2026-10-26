@@ -14,8 +14,10 @@ import (
 	"reflect"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-billy/v6"
 	nfs "github.com/treeverse/go-nfs"
@@ -104,18 +106,24 @@ func (f *trackingFile) Close() error {
 // serveAndMount starts an NFS server backed by handler and mounts it, registering cleanup for both.
 // Test helper shared across handler-level tests.
 func serveAndMount(t *testing.T, handler nfs.Handler) *nfsc.Target {
-	target, _ := serveAndMountClient(t, handler)
+	target, _, _ := serveServerAndMount(t, &nfs.Server{Handler: handler})
 	return target
 }
 
-func serveAndMountClient(t *testing.T, handler nfs.Handler) (*nfsc.Target, *nfsc.Mount) {
+// serveServerAndMount also returns what srv.Serve returns.
+func serveServerAndMount(t *testing.T, srv *nfs.Server) (*nfsc.Target, *nfsc.Mount, <-chan error) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if srv.Context != nil {
+		// The caller closes the listener on shutdown, as Everest does.
+		context.AfterFunc(srv.Context, func() { _ = listener.Close() })
+	}
+	served := make(chan error, 1)
 	go func() {
-		_ = nfs.Serve(listener, handler)
+		served <- srv.Serve(listener)
 	}()
 
 	// rpc.DialTCP binds a random local source port and, for non-privileged
@@ -139,9 +147,14 @@ func serveAndMountClient(t *testing.T, handler nfs.Handler) (*nfsc.Target, *nfsc
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = mounter.Unmount() })
+	t.Cleanup(func() {
+		// Skip Unmount once the server has stopped: the client would retry it for 10s.
+		if srv.Context == nil || srv.Context.Err() == nil {
+			_ = mounter.Unmount()
+		}
+	})
 
-	return target, mounter
+	return target, mounter, served
 }
 
 type umountRecorder struct {
@@ -162,12 +175,112 @@ func TestUmount(t *testing.T) {
 	}
 	f.Close()
 	recorder := &umountRecorder{Handler: helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit)}
-	_, mounter := serveAndMountClient(t, recorder)
+	_, mounter, _ := serveServerAndMount(t, &nfs.Server{Handler: recorder})
 	if err := mounter.Unmount(); err != nil {
 		t.Fatal(err)
 	}
 	if recorder.dirpath != "/" {
 		t.Errorf("Umount(%q), want \"/\"", recorder.dirpath)
+	}
+}
+
+// cancelOnUmount cancels the server's context from Umount, as a server that exits on unmount does.
+type cancelOnUmount struct {
+	nfs.Handler
+	cancel context.CancelFunc
+}
+
+func (h *cancelOnUmount) Umount(context.Context, net.Conn, nfs.MountRequest) error {
+	h.cancel()
+	return nil
+}
+
+func TestUmountCancellingServerContext(t *testing.T) {
+	mem := memfs.New()
+	f, err := mem.Create("/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handler := &cancelOnUmount{Handler: helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit), cancel: cancel}
+	_, mounter, served := serveServerAndMount(t, &nfs.Server{Handler: handler, Context: ctx})
+	if err := mounter.Unmount(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after its context ended")
+	}
+}
+
+// failingWriteConn fails every Write and counts the calls.
+type failingWriteConn struct {
+	net.Conn
+	writes atomic.Int32
+}
+
+func (c *failingWriteConn) Write([]byte) (int, error) {
+	c.writes.Add(1)
+	return 0, errors.New("write failed")
+}
+
+// oneConnListener hands out the conns sent on conns, then net.ErrClosed once closed.
+type oneConnListener struct {
+	conns chan net.Conn
+	// Serve closes its listener too (server.go defer l.Close()), so Close runs twice.
+	once sync.Once
+}
+
+func (l *oneConnListener) Accept() (net.Conn, error) {
+	c, ok := <-l.conns
+	if !ok {
+		return nil, net.ErrClosed
+	}
+	return c, nil
+}
+
+func (l *oneConnListener) Close() error {
+	l.once.Do(func() { close(l.conns) })
+	return nil
+}
+
+func (l *oneConnListener) Addr() net.Addr { return &net.TCPAddr{} }
+
+func TestServeReturnsAfterReplyWriteFails(t *testing.T) {
+	client, server := net.Pipe()
+	conn := &failingWriteConn{Conn: server}
+	listener := &oneConnListener{conns: make(chan net.Conn, 1)}
+	listener.conns <- conn
+	served := make(chan error, 1)
+	go func() { served <- (&nfs.Server{}).Serve(listener) }()
+
+	// Three RPC CALLs for an unknown program; each gets a PROC_UNAVAIL reply.
+	// Write errors are fine: the server may close the conn once a reply fails.
+	for xid := uint32(1); xid <= 3; xid++ {
+		var frame [11]uint32
+		frame[0] = 1<<31 | 40
+		frame[1], frame[3], frame[4], frame[5] = xid, 2, 99999, 1
+		_ = binary.Write(client, binary.BigEndian, frame)
+	}
+	_ = client.Close()
+	_ = listener.Close()
+
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after a reply write failed")
+	}
+	if n := conn.writes.Load(); n != 1 {
+		t.Errorf("Write called %d times, want 1", n)
 	}
 }
 
