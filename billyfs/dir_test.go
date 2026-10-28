@@ -2,7 +2,9 @@ package billyfs_test
 
 import (
 	"context"
+	"errors"
 	iofs "io/fs"
+	"net"
 	"path"
 	"sort"
 	"strings"
@@ -77,6 +79,103 @@ func (s *sliceIterator) Cookie() uint64   { return uint64(s.index) }
 func (s *sliceIterator) Verifier() uint64 { return 1 }
 func (s *sliceIterator) Err() error       { return nil }
 func (s *sliceIterator) Close()           {}
+
+// noCacheHandler is a Handler that keeps no listings.  billyfs then computes
+// the verifier itself from the directory as it is now, rather than handing back
+// the listing a cookie was issued against, which is what makes a stale cookie
+// visible.  It forwards every Handler method and deliberately does not expose
+// CachingHandler, so the methods are spelled out instead of embedded.
+type noCacheHandler struct {
+	inner nfs.Handler
+}
+
+func (h *noCacheHandler) Mount(ctx context.Context, conn net.Conn, req nfs.MountRequest) (nfs.MountStatus, billy.Filesystem, []nfs.AuthFlavor) {
+	return h.inner.Mount(ctx, conn, req)
+}
+
+func (h *noCacheHandler) Change(fs billy.Filesystem) billy.Change { return h.inner.Change(fs) }
+
+func (h *noCacheHandler) FSStat(ctx context.Context, fs billy.Filesystem, s *nfs.FSStat) error {
+	return h.inner.FSStat(ctx, fs, s)
+}
+
+func (h *noCacheHandler) ToHandle(fs billy.Filesystem, path []string) []byte {
+	return h.inner.ToHandle(fs, path)
+}
+
+func (h *noCacheHandler) FromHandle(fh []byte) (billy.Filesystem, []string, error) {
+	return h.inner.FromHandle(fh)
+}
+
+func (h *noCacheHandler) InvalidateHandle(fs billy.Filesystem, fh []byte) error {
+	return h.inner.InvalidateHandle(fs, fh)
+}
+
+func (h *noCacheHandler) HandleLimit() int { return h.inner.HandleLimit() }
+
+// A cookie into a listing read whole is an index into it, so it means something
+// else once the set of names changes.  Resuming on one then skips or repeats
+// entries silently, which is what the verifier is there to catch: the listing
+// must be refused rather than resumed.
+func TestReadDirStaleCookie(t *testing.T) {
+	ctx := context.Background()
+	mem := memfs.New()
+	for _, name := range []string{"b.txt", "c.txt", "d.txt"} {
+		f, err := mem.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	handler := &noCacheHandler{helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit)}
+	fsys := billyfs.New(handler, mem)
+	root := fsapi.Handle(handler.ToHandle(mem, []string{}))
+
+	// Read one entry, keeping the cookie that resumes after it and the
+	// verifier the listing reported.
+	it, err := fsys.ReadDir(ctx, root, 0, 0)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	if !it.Next(ctx) {
+		t.Fatal("listing is empty")
+	}
+	cookie, verifier := it.Entry().Cookie, it.Verifier()
+	if err := it.Close(); err != nil {
+		t.Errorf("closing iterator: %v", err)
+	}
+
+	// The directory has not changed, so the listing resumes.
+	resumed, err := fsys.ReadDir(ctx, root, cookie, verifier)
+	if err != nil {
+		t.Fatalf("resuming an unchanged listing: %v", err)
+	}
+	if err := resumed.Close(); err != nil {
+		t.Errorf("closing iterator: %v", err)
+	}
+
+	// Adding a name ahead of the others moves every entry the cookie could
+	// name, so the same cookie must now be refused.
+	f, err := mem.Create("a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := fsys.ReadDir(ctx, root, cookie, verifier)
+	if !errors.Is(err, fsapi.ErrStaleCookie) {
+		t.Errorf("resuming a changed listing: got %v, want %v", err, fsapi.ErrStaleCookie)
+		if err == nil {
+			if err := stale.Close(); err != nil {
+				t.Errorf("closing iterator: %v", err)
+			}
+		}
+	}
+}
 
 // listedEntry is what a listing reported about one entry, kept so that the
 // filesystem can be asked about it again once the listing is closed.

@@ -63,6 +63,14 @@ func (a *FS) ReadDir(ctx context.Context, dir fsapi.Handle, cookie fsapi.Cookie,
 	if err != nil {
 		return nil, err
 	}
+	// A cookie into this listing means nothing once the listing has changed,
+	// and here it is an index, so resuming on a changed one silently skips or
+	// repeats entries.  Say so instead: the client starts the listing again.
+	// A cookie below FirstCookie has had none of these entries sent to it, and
+	// a client that kept no verifier has nothing to check against.
+	if cookie >= fsapi.FirstCookie && verf != 0 && verifier != verf {
+		return nil, fsapi.ErrStaleCookie
+	}
 	return &listIterator{
 		fs:       a,
 		billy:    bfs,
