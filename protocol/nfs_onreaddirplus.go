@@ -84,14 +84,18 @@ func onReadDirPlus(ctx context.Context, w *response) error {
 	}()
 
 	eof := true
+	maxEntries := maxListEntries(fs)
+	listed := 0
 	for it.Next(ctx) {
 		e := it.Entry()
 		dirBytes += uint32(len(e.Name) + readDirPlusNameOverhead)
 		used += readDirPerEntry // TODO: better estimation.
-		if dirBytes > args.DirCount || used > args.MaxCount {
+		if dirBytes > args.DirCount || used > args.MaxCount ||
+			(maxEntries > 0 && listed >= maxEntries) {
 			eof = false
 			break
 		}
+		listed++
 
 		entry := readDirPlusEntity{
 			Name:   []byte(e.Name),

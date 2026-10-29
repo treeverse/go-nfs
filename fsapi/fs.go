@@ -12,7 +12,8 @@ import (
 // Handles are valid for the lifetime of the mount.  The server never announces
 // that it has finished with one, so a filesystem must be able to resolve any
 // handle it ever returned.  A handle whose object no longer exists resolves to
-// ErrStale.
+// ErrStale.  A filesystem that cannot hold them all implements HandleKeeper,
+// and the server keeps within what it says.
 //
 // Several methods return attributes the protocol sends as an optional
 // "post_op_attr": a nil *Attrs says the filesystem cannot report them, and is
@@ -156,6 +157,26 @@ type DirIterator interface {
 	Err() error
 	// Close releases the iterator.  It is safe to call after an error.
 	Close() error
+}
+
+// HandleKeeper is an FS that cannot keep its handles for the lifetime of the
+// mount, and says how many of them it holds at once.  An FS that does not
+// implement it promises what FS documents: every handle it ever returned still
+// resolves.
+//
+// The server spends the limit on directory listings, which are what mint
+// handles in bulk.  It uses half of it for any one listing and leaves the rest
+// for the handles a client already holds - the directory being listed, its
+// parent, the root it walked from - rather than costing a client the handles it
+// is still using to read the reply.
+//
+// The count describes a filesystem serving one request at a time.  Requests
+// served concurrently each measure themselves against the same limit, so
+// together they can mint more handles than it names.
+type HandleKeeper interface {
+	// HandleLimit returns how many handles this filesystem keeps alive at
+	// once.  Minting one beyond that number costs it an older one.
+	HandleLimit() int
 }
 
 // Symlinker is an FS that has symbolic links.  An FS that does not implement it

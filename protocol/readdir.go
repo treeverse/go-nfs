@@ -14,6 +14,29 @@ const (
 	dotDotCookie = 2
 )
 
+// maxListEntries is how many of a filesystem's own entries one listing reply
+// may report.  A listing is the one request that mints handles in bulk, so a
+// filesystem that cannot keep them all gets half its limit spent here; the rest
+// stays for the handles the client already holds - the directory being listed,
+// its parent, the root it walked from - which it would otherwise lose part way
+// through reading the reply.
+//
+// Zero means no limit, which is what a filesystem keeping its handles for the
+// life of the mount reports by not implementing fsapi.HandleKeeper.
+func maxListEntries(fs fsapi.FS) int {
+	keeper, ok := fs.(fsapi.HandleKeeper)
+	if !ok {
+		return 0
+	}
+	if half := keeper.HandleLimit() / 2; half > 0 {
+		return half
+	}
+	// A limit this small halves to nothing, which would read as no limit at
+	// all.  A listing still has to make progress, so it reports one entry at
+	// a time instead.
+	return 1
+}
+
 // dirPrefix is the "." and ".." entries a listing resuming at cookie still owes
 // the client, and the cookie to resume the filesystem's own listing from.
 //

@@ -81,13 +81,16 @@ func onReadDir(ctx context.Context, w *response) error {
 	}()
 
 	eof := true
+	maxEntries := maxListEntries(fs)
+	listed := 0
 	for it.Next(ctx) {
 		e := it.Entry()
 		used += readDirPerEntry // TODO: better estimation.
-		if used > args.Count {
+		if used > args.Count || (maxEntries > 0 && listed >= maxEntries) {
 			eof = false
 			break
 		}
+		listed++
 		var fileID uint64
 		if e.Attrs != nil {
 			fileID = e.Attrs.Fileid

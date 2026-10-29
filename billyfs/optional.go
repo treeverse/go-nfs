@@ -14,6 +14,8 @@ type unixFS struct {
 }
 
 var (
+	_ fsapi.HandleKeeper = (*FS)(nil)
+	_ fsapi.HandleKeeper = (*unixFS)(nil)
 	_ fsapi.Symlinker    = (*FS)(nil)
 	_ fsapi.Linker       = (*unixFS)(nil)
 	_ fsapi.SpecialFiler = (*unixFS)(nil)

@@ -76,6 +76,13 @@ func (a *FS) issue(bfs billy.Filesystem, path []string) fsapi.Handle {
 	return fsapi.Handle(a.handler.ToHandle(bfs, path))
 }
 
+// HandleLimit implements fsapi.HandleKeeper: a Handler's handles are its own to
+// keep, and a cache of them holds only so many, so the server is told what the
+// Handler reports rather than left to assume they all survive.
+func (a *FS) HandleLimit() int {
+	return a.handler.HandleLimit()
+}
+
 // writable reports whether bfs accepts changes.
 func writable(bfs billy.Filesystem) bool {
 	return billy.CapabilityCheck(bfs, billy.WriteCapability)

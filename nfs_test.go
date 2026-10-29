@@ -1135,3 +1135,114 @@ func (dfs *depthTrackingFS) Lstat(filename string) (fs.FileInfo, error) {
 	dfs.handler.checkRecursiveLock("Lstat", filename)
 	return dfs.Filesystem.Lstat(filename)
 }
+
+// readDirOnce issues exactly one READDIR, where readDir above loops to the end
+// of the directory.  It reports the filesystem's own entries, leaving out the
+// "." and ".." the server supplies itself, and whether the server said the
+// listing was finished.
+func readDirOnce(target *nfsc.Target, dir string, count uint32) ([]string, bool, error) {
+	_, fh, err := target.Lookup(dir)
+	if err != nil {
+		return nil, false, err
+	}
+
+	type readDirArgs struct {
+		rpc.Header
+		Handle      []byte
+		Cookie      uint64
+		CookieVerif uint64
+		Count       uint32
+	}
+
+	type readDirList struct {
+		IsSet bool         `xdr:"union"`
+		Entry readDirEntry `xdr:"unioncase=1"`
+	}
+
+	type readDirListOK struct {
+		DirAttrs   nfsc.PostOpAttr
+		CookieVerf uint64
+	}
+
+	res, err := target.Call(&readDirArgs{
+		Header: rpc.Header{
+			Rpcvers: 2,
+			Vers:    nfsc.Nfs3Vers,
+			Prog:    nfsc.Nfs3Prog,
+			Proc:    uint32(nfs.NFSProcedureReadDir),
+			Cred:    rpc.AuthNull,
+			Verf:    rpc.AuthNull,
+		},
+		Handle: fh,
+		Count:  count,
+	})
+	if err != nil {
+		return nil, false, err
+	}
+
+	status, err := xdr.ReadUint32(res)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := nfsc.NFS3Error(status); err != nil {
+		return nil, false, err
+	}
+	if err := xdr.Read(res, new(readDirListOK)); err != nil {
+		return nil, false, err
+	}
+
+	var names []string
+	for {
+		var item readDirList
+		if err := xdr.Read(res, &item); err != nil {
+			return nil, false, err
+		}
+		if !item.IsSet {
+			break
+		}
+		if item.Entry.FileName == "." || item.Entry.FileName == ".." {
+			continue
+		}
+		names = append(names, item.Entry.FileName)
+	}
+
+	var eof bool
+	if err := xdr.Read(res, &eof); err != nil {
+		return nil, false, err
+	}
+	return names, eof, nil
+}
+
+// One reply may not report more entries than the handler can hold handles for.
+// A listing mints a handle for every entry, and a handler keeping only so many
+// drops the oldest to make room - so a reply carrying more entries than that
+// would reach the client with the handles from its own first entries already
+// gone.  The server stops short instead and says the listing has more to come,
+// which the client asks for with the cookie of the last entry it was given.
+func TestReadDirBoundedByHandleLimit(t *testing.T) {
+	const handleLimit = 16
+	mem := memfs.New()
+	for i := 0; i < handleLimit*4; i++ {
+		f, err := mem.Create(fmt.Sprintf("f%03d.txt", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := serveAndMount(t, helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), handleLimit))
+
+	// A count large enough that the reply's byte budget cannot be what cuts
+	// it short: what is under test is the handle limit, not the buffer.
+	names, eof, err := readDirOnce(target, "/", 1<<20)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	if want := handleLimit / 2; len(names) > want {
+		t.Errorf("entries in one reply: got %d, want at most %d", len(names), want)
+	}
+	if eof {
+		t.Error("got eof on a reply the handle limit cut short, want more to follow")
+	}
+}

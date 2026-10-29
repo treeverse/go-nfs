@@ -8,6 +8,12 @@
 // filesystem, but billy has no handles at all, so one has to be invented for it
 // - which is what Handler.ToHandle and Handler.FromHandle do.  A filesystem
 // written against fsapi directly needs none of this.
+//
+// A Handler is therefore what decides whether this package can keep the promise
+// fsapi.FS makes about handles.  It must round-trip through ToHandle and
+// FromHandle for the life of the mount, or report honestly through HandleLimit
+// how many it holds at once: the server spends that number rather than minting
+// handles the Handler will drop while a client is still using them.
 package billyfs
 
 import (
