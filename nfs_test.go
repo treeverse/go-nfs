@@ -1135,3 +1135,288 @@ func (dfs *depthTrackingFS) Lstat(filename string) (fs.FileInfo, error) {
 	dfs.handler.checkRecursiveLock("Lstat", filename)
 	return dfs.Filesystem.Lstat(filename)
 }
+
+// readDirOnce issues exactly one READDIR, where readDir above loops to the end
+// of the directory.  It reports the filesystem's own entries, leaving out the
+// "." and ".." the server supplies itself, and whether the server said the
+// listing was finished.
+func readDirOnce(target *nfsc.Target, dir string, count uint32) ([]string, bool, error) {
+	_, fh, err := target.Lookup(dir)
+	if err != nil {
+		return nil, false, err
+	}
+
+	type readDirArgs struct {
+		rpc.Header
+		Handle      []byte
+		Cookie      uint64
+		CookieVerif uint64
+		Count       uint32
+	}
+
+	type readDirList struct {
+		IsSet bool         `xdr:"union"`
+		Entry readDirEntry `xdr:"unioncase=1"`
+	}
+
+	type readDirListOK struct {
+		DirAttrs   nfsc.PostOpAttr
+		CookieVerf uint64
+	}
+
+	res, err := target.Call(&readDirArgs{
+		Header: rpc.Header{
+			Rpcvers: 2,
+			Vers:    nfsc.Nfs3Vers,
+			Prog:    nfsc.Nfs3Prog,
+			Proc:    uint32(nfs.NFSProcedureReadDir),
+			Cred:    rpc.AuthNull,
+			Verf:    rpc.AuthNull,
+		},
+		Handle: fh,
+		Count:  count,
+	})
+	if err != nil {
+		return nil, false, err
+	}
+
+	status, err := xdr.ReadUint32(res)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := nfsc.NFS3Error(status); err != nil {
+		return nil, false, err
+	}
+	if err := xdr.Read(res, new(readDirListOK)); err != nil {
+		return nil, false, err
+	}
+
+	var names []string
+	for {
+		var item readDirList
+		if err := xdr.Read(res, &item); err != nil {
+			return nil, false, err
+		}
+		if !item.IsSet {
+			break
+		}
+		if item.Entry.FileName == "." || item.Entry.FileName == ".." {
+			continue
+		}
+		names = append(names, item.Entry.FileName)
+	}
+
+	var eof bool
+	if err := xdr.Read(res, &eof); err != nil {
+		return nil, false, err
+	}
+	return names, eof, nil
+}
+
+// readDirFileIDs lists a directory and returns the fileid reported for each
+// entry, keeping "." and "..", which the other readers here drop.
+func readDirFileIDs(target *nfsc.Target, dir string) (map[string]uint64, error) {
+	_, fh, err := target.Lookup(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	type readDirArgs struct {
+		rpc.Header
+		Handle      []byte
+		Cookie      uint64
+		CookieVerif uint64
+		Count       uint32
+	}
+
+	type readDirList struct {
+		IsSet bool         `xdr:"union"`
+		Entry readDirEntry `xdr:"unioncase=1"`
+	}
+
+	type readDirListOK struct {
+		DirAttrs   nfsc.PostOpAttr
+		CookieVerf uint64
+	}
+
+	res, err := target.Call(&readDirArgs{
+		Header: nfsHeader(nfs.NFSProcedureReadDir),
+		Handle: fh,
+		Count:  4096,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	status, err := xdr.ReadUint32(res)
+	if err != nil {
+		return nil, err
+	}
+	if err := nfsc.NFS3Error(status); err != nil {
+		return nil, err
+	}
+	if err := xdr.Read(res, new(readDirListOK)); err != nil {
+		return nil, err
+	}
+
+	ids := make(map[string]uint64)
+	for {
+		var item readDirList
+		if err := xdr.Read(res, &item); err != nil {
+			return nil, err
+		}
+		if !item.IsSet {
+			break
+		}
+		ids[item.Entry.FileName] = item.Entry.FileId
+	}
+	return ids, nil
+}
+
+// "." and ".." are in every listing, so they are the likeliest place to send a
+// fileid of zero - which RFC 1813 3.3.16 tells a server to avoid, because UNIX
+// clients give that value a meaning of its own.  READDIRPLUS reports the same
+// two entries from the same place, which TestDirPrefixEntry* covers directly.
+func TestListingDotEntriesHaveFileIDs(t *testing.T) {
+	mem := memfs.New()
+	if err := mem.MkdirAll("/sub", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := serveAndMount(t, helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), 1024))
+
+	ids, err := readDirFileIDs(target, "/sub")
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	for _, name := range []string{".", ".."} {
+		id, ok := ids[name]
+		if !ok {
+			t.Errorf("%s: missing from the listing", name)
+			continue
+		}
+		if id == 0 {
+			t.Errorf("%s: got fileid 0, want one the client can use", name)
+		}
+	}
+}
+
+// callStatus issues one raw request and returns the NFS status of its reply,
+// for a procedure the client library does not expose.
+func callStatus(target *nfsc.Target, args any) (uint32, error) {
+	res, err := target.Call(args)
+	if err != nil {
+		return 0, err
+	}
+	return xdr.ReadUint32(res)
+}
+
+// nfsHeader is the RPC header every one of these requests carries.
+func nfsHeader(proc nfs.NFSProcedure) rpc.Header {
+	return rpc.Header{
+		Rpcvers: 2,
+		Vers:    nfsc.Nfs3Vers,
+		Prog:    nfsc.Nfs3Prog,
+		Proc:    uint32(proc),
+		Cred:    rpc.AuthNull,
+		Verf:    rpc.AuthNull,
+	}
+}
+
+// A handle the filesystem no longer knows is answered NFS3ERR_STALE, including
+// by a procedure whose only use of it is a best-effort read of its attributes.
+// The server places a handle by its export alone, so a dead one reaches the
+// procedure intact; replying NFS3_OK would tell the client the handle still
+// works and leave it using it.  RFC 1813 lists NFS3ERR_STALE for each of these:
+// 3.3.21 for COMMIT, 3.3.20 for PATHCONF, 3.3.3 for LOOKUP.
+func TestStaleHandleIsRefused(t *testing.T) {
+	mem := memfs.New()
+	f, err := mem.Create("gone.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := serveAndMount(t, helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), 1024))
+
+	_, fh, err := target.Lookup("/gone.txt")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	// Removed through the server, which is what drops the handle.  Removing
+	// it underneath would leave the handle resolvable and the failure would
+	// be ENOENT from the stat, not a stale handle.
+	if err := target.Remove("/gone.txt"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	type commitArgs struct {
+		rpc.Header
+		Handle []byte
+		Offset uint64
+		Count  uint32
+	}
+	type handleArgs struct {
+		rpc.Header
+		Handle []byte
+	}
+	type lookupArgs struct {
+		rpc.Header
+		Handle []byte
+		Name   string
+	}
+
+	for _, tc := range []struct {
+		name string
+		args any
+	}{
+		{"commit", &commitArgs{Header: nfsHeader(nfs.NFSProcedureCommit), Handle: fh}},
+		{"pathconf", &handleArgs{Header: nfsHeader(nfs.NFSProcedurePathConf), Handle: fh}},
+		{"lookup of .", &lookupArgs{Header: nfsHeader(nfs.NFSProcedureLookup), Handle: fh, Name: "."}},
+		{"lookup of ..", &lookupArgs{Header: nfsHeader(nfs.NFSProcedureLookup), Handle: fh, Name: ".."}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, err := callStatus(target, tc.args)
+			if err != nil {
+				t.Fatalf("call: %v", err)
+			}
+			if got, want := status, uint32(nfs.NFSStatusStale); got != want {
+				t.Errorf("got status %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+// One reply may not report more entries than the handler can hold handles for.
+// A listing mints a handle for every entry, and a handler keeping only so many
+// drops the oldest to make room - so a reply carrying more entries than that
+// would reach the client with the handles from its own first entries already
+// gone.  The server stops short instead and says the listing has more to come,
+// which the client asks for with the cookie of the last entry it was given.
+func TestReadDirBoundedByHandleLimit(t *testing.T) {
+	const handleLimit = 16
+	mem := memfs.New()
+	for i := 0; i < handleLimit*4; i++ {
+		f, err := mem.Create(fmt.Sprintf("f%03d.txt", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := serveAndMount(t, helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), handleLimit))
+
+	// A count large enough that the reply's byte budget cannot be what cuts
+	// it short: what is under test is the handle limit, not the buffer.
+	names, eof, err := readDirOnce(target, "/", 1<<20)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	if want := handleLimit / 2; len(names) > want {
+		t.Errorf("entries in one reply: got %d, want at most %d", len(names), want)
+	}
+	if eof {
+		t.Error("got eof on a reply the handle limit cut short, want more to follow")
+	}
+}
