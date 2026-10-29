@@ -462,12 +462,13 @@ func (a *FS) Rename(ctx context.Context, fromDir fsapi.Handle, fromName string, 
 	// RFC 1813 3.3.14: the two directories are on one filesystem when the
 	// fsid in their attributes matches.  A handler that reports no fsid
 	// leaves both zero, which decides nothing, so fall back to comparing
-	// the filesystems themselves - which is all billy offers.
+	// the filesystems themselves - which is all billy offers.  Either way it
+	// is a move this filesystem cannot make, so both say so the same way.
 	if fromAttrs.FSID != toAttrsValue.FSID {
 		return fsapi.Wcc{}, fsapi.Wcc{}, fsapi.ErrXDev
 	}
 	if fromAttrs.FSID == 0 && !reflect.DeepEqual(bfs, toBfs) {
-		return fsapi.Wcc{}, fsapi.Wcc{}, fsapi.ErrNotSupported
+		return fsapi.Wcc{}, fsapi.Wcc{}, fsapi.ErrXDev
 	}
 	fromPre, toPre := fromAttrs.Cache(), toAttrsValue.Cache()
 
