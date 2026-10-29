@@ -58,19 +58,39 @@ func dirPrefix(ctx context.Context, fs fsapi.FS, dir fsapi.Handle, cookie uint64
 }
 
 // dirPrefixEntry returns the fileid and cookie to report for one of the "." and
-// ".." entries.  A fileid the filesystem will not report is sent as 0, which
-// clients tolerate: it is only a hint for detecting hard links.
-func dirPrefixEntry(ctx context.Context, fs fsapi.FS, dir fsapi.Handle, name string) (fileID uint64, cookie uint64, attrs *fsapi.Attrs) {
+// ".." entries, and the attributes READDIRPLUS sends with it.
+//
+// dirAttrs are the listed directory's own attributes, which the caller has
+// already read.  "." is that directory, so asking the filesystem again would be
+// a second call for an answer already in hand.
+//
+// A fileid of zero is what is left when nothing reports one, and RFC 1813
+// 3.3.16 asks a server to avoid sending it: UNIX clients give it a meaning of
+// its own.  So ".." asks for the parent's attributes rather than settle for it.
+func dirPrefixEntry(ctx context.Context, fs fsapi.FS, dir fsapi.Handle, dirAttrs *fsapi.Attrs, name string) (fileID uint64, cookie uint64, attrs *fsapi.Attrs) {
 	switch name {
 	case ".":
-		if a, err := fs.GetAttr(ctx, dir); err == nil {
-			return a.Fileid, dotCookie, &a
+		if dirAttrs == nil {
+			return 0, dotCookie, nil
 		}
-		return 0, dotCookie, nil
+		return dirAttrs.Fileid, dotCookie, dirAttrs
 	default:
-		if _, a, err := fs.LookupParent(ctx, dir); err == nil && a != nil {
-			return a.Fileid, dotDotCookie, a
+		parent, a, err := fs.LookupParent(ctx, dir)
+		if err != nil {
+			return 0, dotDotCookie, nil
 		}
-		return 0, dotDotCookie, nil
+		if a == nil {
+			// LookupParent reports the parent's attributes as a
+			// post_op_attr, so a filesystem may report none and
+			// still be answering correctly.  The entry needs a
+			// fileid either way.
+			if got, err := fs.GetAttr(ctx, parent); err == nil {
+				a = &got
+			}
+		}
+		if a == nil {
+			return 0, dotDotCookie, nil
+		}
+		return a.Fileid, dotDotCookie, a
 	}
 }

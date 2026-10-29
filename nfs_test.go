@@ -1213,6 +1213,93 @@ func readDirOnce(target *nfsc.Target, dir string, count uint32) ([]string, bool,
 	return names, eof, nil
 }
 
+// readDirFileIDs lists a directory and returns the fileid reported for each
+// entry, keeping "." and "..", which the other readers here drop.
+func readDirFileIDs(target *nfsc.Target, dir string) (map[string]uint64, error) {
+	_, fh, err := target.Lookup(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	type readDirArgs struct {
+		rpc.Header
+		Handle      []byte
+		Cookie      uint64
+		CookieVerif uint64
+		Count       uint32
+	}
+
+	type readDirList struct {
+		IsSet bool         `xdr:"union"`
+		Entry readDirEntry `xdr:"unioncase=1"`
+	}
+
+	type readDirListOK struct {
+		DirAttrs   nfsc.PostOpAttr
+		CookieVerf uint64
+	}
+
+	res, err := target.Call(&readDirArgs{
+		Header: nfsHeader(nfs.NFSProcedureReadDir),
+		Handle: fh,
+		Count:  4096,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	status, err := xdr.ReadUint32(res)
+	if err != nil {
+		return nil, err
+	}
+	if err := nfsc.NFS3Error(status); err != nil {
+		return nil, err
+	}
+	if err := xdr.Read(res, new(readDirListOK)); err != nil {
+		return nil, err
+	}
+
+	ids := make(map[string]uint64)
+	for {
+		var item readDirList
+		if err := xdr.Read(res, &item); err != nil {
+			return nil, err
+		}
+		if !item.IsSet {
+			break
+		}
+		ids[item.Entry.FileName] = item.Entry.FileId
+	}
+	return ids, nil
+}
+
+// "." and ".." are in every listing, so they are the likeliest place to send a
+// fileid of zero - which RFC 1813 3.3.16 tells a server to avoid, because UNIX
+// clients give that value a meaning of its own.  READDIRPLUS reports the same
+// two entries from the same place, which TestDirPrefixEntry* covers directly.
+func TestListingDotEntriesHaveFileIDs(t *testing.T) {
+	mem := memfs.New()
+	if err := mem.MkdirAll("/sub", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := serveAndMount(t, helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), 1024))
+
+	ids, err := readDirFileIDs(target, "/sub")
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	for _, name := range []string{".", ".."} {
+		id, ok := ids[name]
+		if !ok {
+			t.Errorf("%s: missing from the listing", name)
+			continue
+		}
+		if id == 0 {
+			t.Errorf("%s: got fileid 0, want one the client can use", name)
+		}
+	}
+}
+
 // callStatus issues one raw request and returns the NFS status of its reply,
 // for a procedure the client library does not expose.
 func callStatus(target *nfsc.Target, args any) (uint32, error) {

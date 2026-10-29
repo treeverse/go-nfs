@@ -56,7 +56,7 @@ func onReadDirPlus(ctx context.Context, w *response) error {
 
 	prefix, from := dirPrefix(ctx, fs, dir, args.Cookie)
 	for _, name := range prefix {
-		fileID, cookie, attrs := dirPrefixEntry(ctx, fs, dir, name)
+		fileID, cookie, attrs := dirPrefixEntry(ctx, fs, dir, dirAttrs, name)
 		entry := readDirPlusEntity{
 			FileID: fileID,
 			Name:   []byte(name),
