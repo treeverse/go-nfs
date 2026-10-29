@@ -30,10 +30,11 @@ func onCommit(ctx context.Context, w *response) error {
 		return err
 	}
 
-	var wcc fsapi.Wcc
-	if attrs, err := fs.GetAttr(ctx, h); err == nil {
-		wcc.Post = &attrs
+	post, err := postOpAttrs(ctx, fs, h)
+	if err != nil {
+		return err
 	}
+	wcc := fsapi.Wcc{Post: post}
 
 	writer := bytes.NewBuffer([]byte{})
 	if err := xdr.Write(writer, uint32(NFSStatusOk)); err != nil {

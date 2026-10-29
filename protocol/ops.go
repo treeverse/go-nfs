@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 
 	"github.com/treeverse/go-nfs/fsapi"
@@ -18,6 +20,28 @@ func fhArg(w *response) (fsapi.FS, fsapi.Handle, exportID, error) {
 		return nil, "", 0, &NFSStatusError{NFSStatusInval, err}
 	}
 	return w.Server.fsFor(wire)
+}
+
+// postOpAttrs returns the attributes of h for a reply that carries them as an
+// optional post_op_attr.  A filesystem that cannot report them is answered with
+// none, which the protocol allows and a client copes with.
+//
+// A stale handle is not answered that way.  fsFor places a handle by its export
+// alone, so one naming an object that is gone arrives intact, and a procedure
+// whose only use of it is a best-effort read of its attributes would reply
+// NFS3_OK - telling a client the handle still works and leaving it to keep
+// using it.  Every procedure that reads attributes this way may fail with
+// NFS3ERR_STALE instead, so it does.
+func postOpAttrs(ctx context.Context, fs fsapi.FS, h fsapi.Handle) (*fsapi.Attrs, error) {
+	attrs, err := fs.GetAttr(ctx, h)
+	switch {
+	case err == nil:
+		return &attrs, nil
+	case errors.Is(err, fsapi.ErrStale):
+		return nil, statusError(err, NFSStatusStale)
+	default:
+		return nil, nil
+	}
 }
 
 // dirOpArgs reads a diropargs3 - a directory handle and a name within it - and

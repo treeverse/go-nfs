@@ -1213,6 +1213,93 @@ func readDirOnce(target *nfsc.Target, dir string, count uint32) ([]string, bool,
 	return names, eof, nil
 }
 
+// callStatus issues one raw request and returns the NFS status of its reply,
+// for a procedure the client library does not expose.
+func callStatus(target *nfsc.Target, args any) (uint32, error) {
+	res, err := target.Call(args)
+	if err != nil {
+		return 0, err
+	}
+	return xdr.ReadUint32(res)
+}
+
+// nfsHeader is the RPC header every one of these requests carries.
+func nfsHeader(proc nfs.NFSProcedure) rpc.Header {
+	return rpc.Header{
+		Rpcvers: 2,
+		Vers:    nfsc.Nfs3Vers,
+		Prog:    nfsc.Nfs3Prog,
+		Proc:    uint32(proc),
+		Cred:    rpc.AuthNull,
+		Verf:    rpc.AuthNull,
+	}
+}
+
+// A handle the filesystem no longer knows is answered NFS3ERR_STALE, including
+// by a procedure whose only use of it is a best-effort read of its attributes.
+// The server places a handle by its export alone, so a dead one reaches the
+// procedure intact; replying NFS3_OK would tell the client the handle still
+// works and leave it using it.  RFC 1813 lists NFS3ERR_STALE for each of these:
+// 3.3.21 for COMMIT, 3.3.20 for PATHCONF, 3.3.3 for LOOKUP.
+func TestStaleHandleIsRefused(t *testing.T) {
+	mem := memfs.New()
+	f, err := mem.Create("gone.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := serveAndMount(t, helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), 1024))
+
+	_, fh, err := target.Lookup("/gone.txt")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	// Removed through the server, which is what drops the handle.  Removing
+	// it underneath would leave the handle resolvable and the failure would
+	// be ENOENT from the stat, not a stale handle.
+	if err := target.Remove("/gone.txt"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	type commitArgs struct {
+		rpc.Header
+		Handle []byte
+		Offset uint64
+		Count  uint32
+	}
+	type handleArgs struct {
+		rpc.Header
+		Handle []byte
+	}
+	type lookupArgs struct {
+		rpc.Header
+		Handle []byte
+		Name   string
+	}
+
+	for _, tc := range []struct {
+		name string
+		args any
+	}{
+		{"commit", &commitArgs{Header: nfsHeader(nfs.NFSProcedureCommit), Handle: fh}},
+		{"pathconf", &handleArgs{Header: nfsHeader(nfs.NFSProcedurePathConf), Handle: fh}},
+		{"lookup of .", &lookupArgs{Header: nfsHeader(nfs.NFSProcedureLookup), Handle: fh, Name: "."}},
+		{"lookup of ..", &lookupArgs{Header: nfsHeader(nfs.NFSProcedureLookup), Handle: fh, Name: ".."}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, err := callStatus(target, tc.args)
+			if err != nil {
+				t.Fatalf("call: %v", err)
+			}
+			if got, want := status, uint32(nfs.NFSStatusStale); got != want {
+				t.Errorf("got status %d, want %d", got, want)
+			}
+		})
+	}
+}
+
 // One reply may not report more entries than the handler can hold handles for.
 // A listing mints a handle for every entry, and a handler keeping only so many
 // drops the oldest to make room - so a reply carrying more entries than that

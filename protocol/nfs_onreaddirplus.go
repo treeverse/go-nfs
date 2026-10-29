@@ -48,6 +48,12 @@ func onReadDirPlus(ctx context.Context, w *response) error {
 	dirBytes := uint32(0)
 	used := uint32(readDirOverhead)
 
+	// Read before the iterator is opened, and before the prefix: see onReadDir.
+	dirAttrs, err := postOpAttrs(ctx, fs, dir)
+	if err != nil {
+		return err
+	}
+
 	prefix, from := dirPrefix(ctx, fs, dir, args.Cookie)
 	for _, name := range prefix {
 		fileID, cookie, attrs := dirPrefixEntry(ctx, fs, dir, name)
@@ -62,12 +68,6 @@ func onReadDirPlus(ctx context.Context, w *response) error {
 			entry.Attributes = &wire
 		}
 		entities = append(entities, entry)
-	}
-
-	// Read before the iterator is opened: see onReadDir.
-	var dirAttrs *fsapi.Attrs
-	if a, err := fs.GetAttr(ctx, dir); err == nil {
-		dirAttrs = &a
 	}
 
 	it, err := fs.ReadDir(ctx, dir, from, fsapi.Verifier(args.CookieVerif))

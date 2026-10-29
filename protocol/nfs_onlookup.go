@@ -25,16 +25,19 @@ func onLookup(ctx context.Context, w *response) error {
 		// A directory is its own ".", so there is nothing to look up:
 		// report the same handle and its attributes twice.
 		found = dir
-		if a, err := fs.GetAttr(ctx, dir); err == nil {
-			attrs, dirAttrs = &a, &a
+		attrs, err = postOpAttrs(ctx, fs, dir)
+		if err != nil {
+			return err
 		}
+		dirAttrs = attrs
 	case "..":
 		found, attrs, err = fs.LookupParent(ctx, dir)
 		if err != nil {
 			return statusError(err, NFSStatusNoEnt)
 		}
-		if a, err := fs.GetAttr(ctx, dir); err == nil {
-			dirAttrs = &a
+		dirAttrs, err = postOpAttrs(ctx, fs, dir)
+		if err != nil {
+			return err
 		}
 	default:
 		found, attrs, dirAttrs, err = fs.Lookup(ctx, dir, name)

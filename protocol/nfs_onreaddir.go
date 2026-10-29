@@ -48,6 +48,16 @@ func onReadDir(ctx context.Context, w *response) error {
 	entities := make([]readDirEntity, 0)
 	used := uint32(readDirOverhead)
 
+	// The directory's own attributes are read before the iterator is opened.
+	// A filesystem may hold the directory while a listing is open, so asking
+	// it anything else in between risks taking the same lock twice.  Reading
+	// them first also settles whether the handle is still good, so the "."
+	// and ".." entries are never built against one that is gone.
+	dirAttrs, err := postOpAttrs(ctx, fs, dir)
+	if err != nil {
+		return err
+	}
+
 	prefix, from := dirPrefix(ctx, fs, dir, args.Cookie)
 	for _, name := range prefix {
 		fileID, cookie, _ := dirPrefixEntry(ctx, fs, dir, name)
@@ -57,14 +67,6 @@ func onReadDir(ctx context.Context, w *response) error {
 			Cookie: cookie,
 			Next:   true,
 		})
-	}
-
-	// The directory's own attributes are read before the iterator is opened.
-	// A filesystem may hold the directory while a listing is open, so asking
-	// it anything else in between risks taking the same lock twice.
-	var dirAttrs *fsapi.Attrs
-	if a, err := fs.GetAttr(ctx, dir); err == nil {
-		dirAttrs = &a
 	}
 
 	it, err := fs.ReadDir(ctx, dir, from, fsapi.Verifier(args.CookieVerif))

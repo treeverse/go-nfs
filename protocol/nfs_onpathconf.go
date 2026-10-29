@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/treeverse/go-nfs/fsapi"
 	"github.com/willscott/go-nfs-client/nfs/xdr"
 )
 
@@ -42,9 +41,9 @@ func onPathConf(ctx context.Context, w *response) error {
 		return err
 	}
 
-	var attrs *fsapi.Attrs
-	if a, err := fs.GetAttr(ctx, h); err == nil {
-		attrs = &a
+	attrs, err := postOpAttrs(ctx, fs, h)
+	if err != nil {
+		return err
 	}
 
 	writer := bytes.NewBuffer([]byte{})
