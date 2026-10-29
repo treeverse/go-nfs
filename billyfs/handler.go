@@ -14,6 +14,14 @@
 // FromHandle for the life of the mount, or report honestly through HandleLimit
 // how many it holds at once: the server spends that number rather than minting
 // handles the Handler will drop while a client is still using them.
+//
+// billyfs does not satisfy fsapi's requirement that the checks and the removal
+// in Remove and RemoveDir be atomic, because billy has no primitive for it.
+// A target that changes type or gains an entry in the window is removed anyway.
+//
+// billyfs does not satisfy fsapi's requirement that Write return only once the
+// bytes are durable, because billy has no Sync.  A client drops its only copy
+// of bytes that a crash can still lose.
 package billyfs
 
 import (

@@ -203,6 +203,11 @@ func fileType(mode os.FileMode) fsapi.FileType {
 // the name: every x.txt in the tree would otherwise be one object.  Taking the
 // components rather than a string is what stops a caller passing a bare name,
 // which is how that went wrong once already.
+//
+// That invented fileid does not satisfy fsapi's requirement that a fileid be
+// stable, because it is derived from the path.  A client tracking an object
+// across a rename sees a new object instead.  A filesystem reporting its own
+// fileids is unaffected.
 func toAttrs(bfs billy.Filesystem, path []string, info os.FileInfo) fsapi.Attrs {
 	fullPath := bfs.Join(path...)
 	mode := info.Mode()
