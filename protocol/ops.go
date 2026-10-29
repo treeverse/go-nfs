@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"strings"
 
 	"github.com/treeverse/go-nfs/fsapi"
 	"github.com/willscott/go-nfs-client/nfs/xdr"
@@ -38,10 +39,12 @@ func dirOpArgs(w *response) (fs fsapi.FS, dir fsapi.Handle, id exportID, name st
 	return fs, dir, id, name, nil
 }
 
-// checkName rejects a name this server will not pass to a filesystem.  "." and
-// ".." are rejected for operations that create or remove: a client asking to
-// create ".." is asking for something that cannot be created, and NFS gives
-// EEXIST for it rather than inventing an entry.
+// checkName rejects a name this server will not pass to a filesystem.  A name
+// is one component of a path, and fsapi.FS promises its implementations as
+// much, so a separator or an embedded NUL is refused here: a filesystem that
+// believed the promise would otherwise be handed a path to walk, reaching
+// objects the client never looked up.  Only the server can keep that promise,
+// because only the server sees the name before it becomes a path.
 func checkName(name string) error {
 	if len(name) > PathNameMax {
 		return &NFSStatusError{NFSStatusNameTooLong, fsapi.ErrNameTooLong}
@@ -49,11 +52,16 @@ func checkName(name string) error {
 	if name == "" {
 		return &NFSStatusError{NFSStatusInval, fsapi.ErrInval}
 	}
+	if strings.ContainsAny(name, "/\x00") {
+		return &NFSStatusError{NFSStatusInval, fsapi.ErrInval}
+	}
 	return nil
 }
 
 // checkNewName is checkName for a name being created or removed, which may not
-// be "." or "..".
+// be "." or "..": a client asking to create ".." is asking for something that
+// cannot be created, and NFS gives EEXIST for it rather than inventing an
+// entry.
 func checkNewName(name string) error {
 	if err := checkName(name); err != nil {
 		return err
