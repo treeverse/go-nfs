@@ -332,6 +332,7 @@ func (a *FS) Mkdir(ctx context.Context, dir fsapi.Handle, name string, change fs
 	mode := os.FileMode(0o755)
 	if change.Perm != nil {
 		mode = goMode(*change.Perm)
+		change.Perm = nil
 	}
 	// MkdirAll, not Mkdir: billy has no single-component mkdir.  The parent
 	// was checked above, so there is nothing left for it to create.
