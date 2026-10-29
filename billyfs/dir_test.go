@@ -200,9 +200,6 @@ func listOne(ctx context.Context, t *testing.T, fsys fsapi.FS, dir fsapi.Handle,
 		if e.Name != name {
 			continue
 		}
-		if e.Attrs == nil {
-			t.Fatalf("%s: listed with no attributes", name)
-		}
 		found, entry = true, listedEntry{handle: e.Handle, fileID: e.Attrs.Fileid}
 	}
 	if err := it.Err(); err != nil {

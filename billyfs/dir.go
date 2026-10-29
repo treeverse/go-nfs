@@ -137,7 +137,7 @@ func (l *listIterator) Next(ctx context.Context) bool {
 	l.current = fsapi.DirEntry{
 		Name:   info.Name(),
 		Handle: l.fs.issue(l.billy, path),
-		Attrs:  &attrs,
+		Attrs:  attrs,
 		Cookie: cookieFor(uint64(l.next)),
 	}
 	l.next++
@@ -169,7 +169,7 @@ func (s *streamIterator) Next(ctx context.Context) bool {
 	s.current = fsapi.DirEntry{
 		Name:   info.Name(),
 		Handle: fsapi.Handle(s.it.Handle()),
-		Attrs:  &attrs,
+		Attrs:  attrs,
 		Cookie: cookieFor(s.it.Cookie()),
 	}
 	return true

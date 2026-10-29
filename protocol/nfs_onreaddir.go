@@ -93,12 +93,8 @@ func onReadDir(ctx context.Context, w *response) error {
 			break
 		}
 		listed++
-		var fileID uint64
-		if e.Attrs != nil {
-			fileID = e.Attrs.Fileid
-		}
 		entities = append(entities, readDirEntity{
-			FileID: fileID,
+			FileID: e.Attrs.Fileid,
 			Name:   []byte(e.Name),
 			Cookie: uint64(e.Cookie),
 			Next:   true,

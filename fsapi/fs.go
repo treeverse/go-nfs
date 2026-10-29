@@ -114,10 +114,15 @@ type DirEntry struct {
 	// Handle is the entry's handle.  It is valid beyond the lifetime of the
 	// iterator that produced it.
 	Handle Handle
-	// Attrs are the entry's attributes, or nil if the filesystem cannot
-	// report them without extra work.  Reporting them lets the server serve
-	// READDIRPLUS without a second pass.
-	Attrs *Attrs
+	// Attrs are the entry's attributes, which a listing always reports.
+	//
+	// This is the one place in this package where attributes are not
+	// optional, because a listing entry has no absent arm to map onto: both
+	// of the NFS entry structures carry a mandatory fileid, and the fileid
+	// is an attribute.  A filesystem that reported none would leave the
+	// server to send a fileid of zero, which NFS reserves and clients read
+	// as "no such object".
+	Attrs Attrs
 	// Cookie resumes a listing after this entry.
 	Cookie Cookie
 }

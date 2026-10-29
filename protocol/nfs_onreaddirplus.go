@@ -97,15 +97,17 @@ func onReadDirPlus(ctx context.Context, w *response) error {
 		}
 		listed++
 
+		// The attributes are always sent.  entryplus3 carries them as a
+		// post_op_attr, which may be absent, but a listing reports them
+		// and sending what is already in hand is the point of the
+		// procedure.
+		wire := toWire(e.Attrs)
 		entry := readDirPlusEntity{
-			Name:   []byte(e.Name),
-			Cookie: uint64(e.Cookie),
-			Next:   true,
-		}
-		if e.Attrs != nil {
-			entry.FileID = e.Attrs.Fileid
-			wire := toWire(*e.Attrs)
-			entry.Attributes = &wire
+			FileID:     e.Attrs.Fileid,
+			Name:       []byte(e.Name),
+			Cookie:     uint64(e.Cookie),
+			Attributes: &wire,
+			Next:       true,
 		}
 		// An entry whose handle cannot be encoded is reported without
 		// one: the client then looks the name up, which costs a round
