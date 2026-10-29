@@ -70,13 +70,13 @@ type FS interface {
 	// fails with ErrXDev.
 	Rename(ctx context.Context, fromDir Handle, fromName string, toDir Handle, toName string) (from, to Wcc, err error)
 
-	// ReadDir returns an iterator over the entries of dir, resuming after
-	// cookie.  A zero cookie starts a fresh listing and ignores verf;
-	// otherwise verf is the verifier from the listing cookie came from, and
-	// ReadDir fails with ErrStaleCookie if it can no longer resume there.
+	// ReadDir returns an iterator over the entries of dir, resuming after cookie.  A zero
+	// cookie starts a fresh listing and ignores verf; otherwise verf is the verifier from
+	// the listing cookie came from, and ReadDir fails with ErrStaleCookie if it can no
+	// longer resume there.
 	//
-	// The iterator need not report "." or "..", which the server serves
-	// itself, and need not sort entries.
+	// The iterator must not report "." or "..", which the server serves itself.  It need
+	// not sort entries.
 	ReadDir(ctx context.Context, dir Handle, cookie Cookie, verf Verifier) (DirIterator, error)
 
 	// FSStat returns how much space the filesystem holding h has.
