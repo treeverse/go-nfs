@@ -1387,6 +1387,54 @@ func TestStaleHandleIsRefused(t *testing.T) {
 	}
 }
 
+// "." and ".." are names within a directory, so looking either up in a file is
+// NFS3ERR_NOTDIR, as for any other name (RFC 1813 3.3.3).
+func TestLookupDot(t *testing.T) {
+	mem := memfs.New()
+	if err := mem.MkdirAll("/path/to/dir", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := mem.Create("/path/to/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := serveAndMount(t, helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), 1024))
+
+	type lookupArgs struct {
+		rpc.Header
+		Handle []byte
+		Name   string
+	}
+
+	for _, tc := range []struct {
+		path string
+		name string
+		want nfs.NFSStatus
+	}{
+		{"/path/to/dir", ".", nfs.NFSStatusOk},
+		{"/path/to/file", ".", nfs.NFSStatusNotDir},
+		{"/path/to/dir", "..", nfs.NFSStatusOk},
+		{"/path/to/file", "..", nfs.NFSStatusNotDir},
+	} {
+		t.Run(tc.path+"/"+tc.name, func(t *testing.T) {
+			_, fh, err := target.Lookup(tc.path)
+			if err != nil {
+				t.Fatalf("lookup: %v", err)
+			}
+			status, err := callStatus(target, &lookupArgs{Header: nfsHeader(nfs.NFSProcedureLookup), Handle: fh, Name: tc.name})
+			if err != nil {
+				t.Fatalf("call: %v", err)
+			}
+			if got, want := status, uint32(tc.want); got != want {
+				t.Errorf("got status %d, want %d", got, want)
+			}
+		})
+	}
+}
+
 // One reply may not report more entries than the handler can hold handles for.
 // A listing mints a handle for every entry, and a handler keeping only so many
 // drops the oldest to make room - so a reply carrying more entries than that

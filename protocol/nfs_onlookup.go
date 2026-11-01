@@ -29,6 +29,9 @@ func onLookup(ctx context.Context, w *response) error {
 		if err != nil {
 			return err
 		}
+		if attrs != nil && !attrs.IsDir() {
+			return &NFSStatusError{NFSStatusNotDir, nil}
+		}
 		dirAttrs = attrs
 	case "..":
 		found, attrs, err = fs.LookupParent(ctx, dir)

@@ -148,6 +148,9 @@ func (a *FS) LookupParent(ctx context.Context, dir fsapi.Handle) (fsapi.Handle, 
 	if err != nil {
 		return "", nil, err
 	}
+	if attrs := optAttrs(bfs, path); attrs != nil && !attrs.IsDir() {
+		return "", nil, fsapi.ErrNotDir
+	}
 	// The root is its own parent, which is what a client expects of ".." at
 	// the top of a mount.
 	parent := path

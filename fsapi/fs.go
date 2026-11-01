@@ -38,7 +38,8 @@ type FS interface {
 
 	// LookupParent returns the directory holding dir.  The root is its own
 	// parent.  The server uses it to serve a lookup of "..", and to report
-	// the fileid of the ".." entry of a directory listing.
+	// the fileid of the ".." entry of a directory listing.  It must fail with
+	// ErrNotDir if dir is not the handle of a directory.
 	LookupParent(ctx context.Context, dir Handle) (h Handle, attrs *Attrs, err error)
 
 	// Access returns which of the operations in want the caller may perform
