@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	iofs "io/fs"
+	"math"
 	"net"
 	"path"
 	"sort"
@@ -174,6 +175,61 @@ func TestReadDirStaleCookie(t *testing.T) {
 				t.Errorf("closing iterator: %v", err)
 			}
 		}
+	}
+}
+
+// A cookie past the last entry names no entry of the listing, so it is refused
+// rather than resumed as an empty listing (RFC 1813 3.3.16).  The cookie of the
+// last entry still resumes, to the end of the listing.
+func TestReadDirCookiePastEnd(t *testing.T) {
+	ctx := context.Background()
+	mem := memfs.New()
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		f, err := mem.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	handler := &noCacheHandler{helpers.NewCachingHandler(helpers.NewNullAuthHandler(mem), testCacheLimit)}
+	fsys := billyfs.New(handler, mem)
+	root := fsapi.Handle(handler.ToHandle(mem, []string{}))
+
+	for _, tc := range []struct {
+		name   string
+		cookie fsapi.Cookie
+		stale  bool
+	}{
+		{"last entry", fsapi.FirstCookie + 2, false},
+		{"one past the last entry", fsapi.FirstCookie + 3, true},
+		{"largest cookie", math.MaxUint64, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			it, err := fsys.ReadDir(ctx, root, tc.cookie, 0)
+			if tc.stale {
+				if !errors.Is(err, fsapi.ErrStaleCookie) {
+					t.Errorf("got %v, want %v", err, fsapi.ErrStaleCookie)
+				}
+				if err == nil {
+					if err := it.Close(); err != nil {
+						t.Errorf("closing iterator: %v", err)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("readdir: %v", err)
+			}
+			if it.Next(ctx) {
+				t.Errorf("got entry %q after the last one", it.Entry().Name)
+			}
+			if err := it.Close(); err != nil {
+				t.Errorf("closing iterator: %v", err)
+			}
+		})
 	}
 }
 

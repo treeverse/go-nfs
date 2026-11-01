@@ -71,6 +71,9 @@ func (a *FS) ReadDir(ctx context.Context, dir fsapi.Handle, cookie fsapi.Cookie,
 	if cookie >= fsapi.FirstCookie && verf != 0 && verifier != verf {
 		return nil, fsapi.ErrStaleCookie
 	}
+	if cookie >= fsapi.FirstCookie && cookie-fsapi.FirstCookie >= fsapi.Cookie(len(entries)) {
+		return nil, fsapi.ErrStaleCookie
+	}
 	return &listIterator{
 		fs:       a,
 		billy:    bfs,

@@ -69,7 +69,7 @@ type Attrs struct {
 	FSID uint64
 	// Fileid identifies the object within its filesystem, as an inode number
 	// does.  Clients use it to detect that two names reach one object, so it
-	// must be stable and must differ between objects.
+	// must be stable and must differ between objects.  It should not be zero.
 	Fileid              uint64
 	Atime, Mtime, Ctime time.Time
 }
