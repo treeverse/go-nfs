@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 
 	"github.com/treeverse/go-nfs/fsapi"
@@ -13,9 +14,19 @@ import (
 // PathNameMax is the longest name this server accepts for one path component.
 const PathNameMax = 255
 
+// readOpaqueWithPadding reads a variable-length opaque, or a string, and the
+// padding that follows it on the wire, leaving r at the next argument.
+func readOpaqueWithPadding(r io.Reader) ([]byte, error) {
+	var b []byte
+	if err := xdr.Read(r, &b); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
 // fhArg reads a file handle argument and resolves it.
 func fhArg(w *response) (fsapi.FS, fsapi.Handle, exportID, error) {
-	wire, err := xdr.ReadOpaque(w.req.Body)
+	wire, err := readOpaqueWithPadding(w.req.Body)
 	if err != nil {
 		return nil, "", 0, &NFSStatusError{NFSStatusInval, err}
 	}
