@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/treeverse/go-nfs/fsapi"
-	"github.com/willscott/go-nfs-client/nfs/xdr"
 )
 
 func onSymlink(ctx context.Context, w *response) error {
@@ -22,7 +21,7 @@ func onSymlink(ctx context.Context, w *response) error {
 	if err != nil {
 		return &NFSStatusError{NFSStatusInval, err}
 	}
-	target, err := xdr.ReadOpaque(w.req.Body)
+	target, err := readOpaqueWithPadding(w.req.Body)
 	if err != nil {
 		return &NFSStatusError{NFSStatusInval, err}
 	}

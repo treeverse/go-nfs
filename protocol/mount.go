@@ -24,7 +24,7 @@ func onMountNull(ctx context.Context, w *response) error {
 
 func onMount(ctx context.Context, w *response) error {
 	// TODO: auth check.
-	dirpath, err := xdr.ReadOpaque(w.req.Body)
+	dirpath, err := readOpaqueWithPadding(w.req.Body)
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func onMount(ctx context.Context, w *response) error {
 }
 
 func onUMount(ctx context.Context, w *response) error {
-	dirpath, err := xdr.ReadOpaque(w.req.Body)
+	dirpath, err := readOpaqueWithPadding(w.req.Body)
 	if err != nil {
 		return err
 	}
